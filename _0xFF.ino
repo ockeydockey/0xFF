@@ -1,7 +1,15 @@
 /***************************************************
 * Created by David Ockey
 * (C) 2011 - 2014
+****************************************************
+* Features:
+* [ ] 16 Channel selector button matrix
+* [ ] 5 arpeggiation modes
+* [ ] Adjustable arpeggiation
+* [ ] Per-channel pitch bending
+* [o] Adjustable pitch bend according to GM spec
 ***************************************************/
+
 // For MIDI
 #include <MIDI.h>
 #include <Chord.h>
@@ -11,25 +19,29 @@
 #include <Wire.h>
 #include "Adafruit_Trellis.h"
 
+// Hardware assignments
 #define SPEAKER 4
+#define ARP_SPEED A0
 
 /*******************************
 * Arpeggiation modes
 *******************************/
 // Low Priority
-#define AMODE_LOWEST 5
+#define AMODE_LOWEST 9
 // Ascending Arpeggiation
-#define AMODE_ASCEND 6
+#define AMODE_ASCEND 10
 // Play most recent note
-#define AMODE_OFF 7
+#define AMODE_OFF 11
 // Descending Arpeggiation
-#define AMODE_DESCEND 8
+#define AMODE_DESCEND 12
 // High Priority
-#define AMODE_HIGHEST 9
+#define AMODE_HIGHEST 13
 
 Chord chord;
 uint8_t i;
+unsigned int delayFactor;
 unsigned long timer;
+unsigned long int wait = millis() + 30;
 int s;
 byte c;
 byte current[] = {255, 255};
@@ -130,7 +142,13 @@ void HandleNoteOn(byte channel, byte pitch, byte velocity) {
 }
 
 void HandleNoteOff(byte channel, byte pitch, byte velocity) {
-  chord.removeNote(pitch);
+  if (chord.removeNote(pitch) <= i) {
+    if (i > 0) {
+      i--;
+    } else {
+      i = 0;
+    }
+  }
   if (current[0] == pitch && current[1] == channel) {
     current[0] = 255;
     current[1] = 255;
@@ -142,8 +160,6 @@ void HandleNoteOff(byte channel, byte pitch, byte velocity) {
 }
 
 void HandleControlChange(byte channel, byte number, byte value) {
-//  if (channel == 1) {
-    digitalWrite(6, LOW);
     if (number == 100 && value == 0) {
       pitchBendMSB = true;
       bendSemitones = 0;
@@ -154,7 +170,6 @@ void HandleControlChange(byte channel, byte number, byte value) {
     }
     else if (number == 6 && pitchBendLSB) {
       bendCoefficient = 16384.0 / (double)value;
-      digitalWrite(7, LOW);
     }
     else if (number == 38 && bendSemitones != 0) {
       bendCoefficient = 16384.0 / ((double)bendSemitones + ((double)bendCents / 100.0));
@@ -167,7 +182,6 @@ void HandleControlChange(byte channel, byte number, byte value) {
       bendSemitones = 0;
       bendCents = 0;
     }
-//  }
 }
 
 void HandlePitchBend(byte channel, int amount) {
@@ -220,7 +234,7 @@ void arpAscend() {
     play = true;
   }
   if (s > 0 && play) {
-    if (millis() - timer > 1) {
+    if (millis() - timer > delayFactor / 10) {
       tone(
         SPEAKER,
         440.0 * pow(2.0, (chord.getNote(i) - 69.0 + bend[c]) / 12.0)
@@ -231,7 +245,7 @@ void arpAscend() {
       timer = millis();
     }
   }
-  if ((!play && millis() - timer > 10) && s != 1) {
+  if ((!play && millis() - timer > delayFactor) && s != 1) {
     noTone(SPEAKER);
     play = !play;
     timer = millis();
@@ -250,7 +264,7 @@ void arpDescend() {
     play = true;
   }
   if (s > 0 && play) {
-    if (millis() - timer > 1) {
+    if (millis() - timer > delayFactor / 10) {
       tone(
         SPEAKER,
         440.0 * pow(2.0, (chord.getNote(i) - 69.0 + bend[c]) / 12.0)
@@ -264,7 +278,7 @@ void arpDescend() {
       timer = millis();
     }
   }
-  if ((!play && millis() - timer > 10) && s != 1) {
+  if ((!play && millis() - timer > delayFactor) && s != 1) {
     noTone(SPEAKER);
     play = !play;
     timer = millis();
@@ -295,6 +309,8 @@ void setup() {
   // Set pin high for Trellis Interrupt pin
   pinMode(A2, INPUT);
   digitalWrite(A2, HIGH);
+  // Set the input for the arpeggiation speed
+  pinMode(A0, INPUT);
   // Set the pinmode to PULLUP for the 5 way selector
   pinMode(AMODE_LOWEST, INPUT_PULLUP);
   pinMode(AMODE_ASCEND, INPUT_PULLUP);
@@ -311,9 +327,9 @@ void setup() {
   for (uint8_t i = 0; i < 16; i++) {
     trellis.setLED(i);
     trellis.writeDisplay();
-    delay(50);
+    delay(40);
   }
-  delay(500);
+  delay(100);
   for (uint8_t i = 0; i < 16; i++) {
     if (chanEnable[i + 1]) {
       trellis.setLED(i);
@@ -321,11 +337,9 @@ void setup() {
       trellis.clrLED(i);
     }
     trellis.writeDisplay();
-    delay(50);
+    delay(40);
   }
 }
-
-unsigned long int wait = millis() + 30;
 
 void loop() {
   if (millis() >= wait) {
@@ -335,6 +349,7 @@ void loop() {
     }
   }
   MIDI.read();
+  delayFactor = map(analogRead(ARP_SPEED),0, 1024, 10, 512);
   if (digitalRead(AMODE_LOWEST) == LOW) {
     playLowest();
   } else if (digitalRead(AMODE_ASCEND) == LOW) {
@@ -349,9 +364,3 @@ void loop() {
     noTone(SPEAKER);
   }
 }
-
-/* Debug code:
-  tone(SPEAKER, 1000);
-  delay(4000);
-  noTone(SPEAKER);
-*/
