@@ -233,23 +233,24 @@ void arpAscend() {
     // noTone(SPEAKER);
     play = true;
   }
-  if (s > 0 && play) {
+//  if (s > 0 && play) {
+  if (s > 0) {
     if (millis() - timer > delayFactor / 10) {
       tone(
         SPEAKER,
         440.0 * pow(2.0, (chord.getNote(i) - 69.0 + bend[c]) / 12.0)
       );
-      play = !play;
+//      play = !play;
       i++;
       i = i % s;
       timer = millis();
     }
   }
-  if ((!play && millis() - timer > delayFactor) && s != 1) {
-    noTone(SPEAKER);
-    play = !play;
-    timer = millis();
-  }
+//  if ((!play && millis() - timer > delayFactor) && s != 1) {
+//    noTone(SPEAKER);
+//    play = !play;
+//    timer = millis();
+//  }
   prevbend[c] = bend[c];
 }
 
