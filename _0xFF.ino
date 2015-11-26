@@ -1,6 +1,6 @@
 /***************************************************
 * Created by David Ockey
-* (C) 2011 - 2014
+* (C) 2011 - 2015
 ****************************************************
 * Features:
 * [ ] 16 Channel selector button matrix
@@ -21,7 +21,9 @@
 
 // Hardware assignments
 #define SPEAKER 4
+#define STACCATO 8
 #define ARP_SPEED A0
+#define GAP A1
 
 /*******************************
 * Arpeggiation modes
@@ -39,7 +41,8 @@
 
 Chord chord;
 uint8_t i;
-unsigned int delayFactor;
+unsigned int noteGap;
+unsigned int noteLength;
 unsigned long timer;
 unsigned long int wait = millis() + 30;
 int s;
@@ -104,8 +107,9 @@ double prevbend[] = {
   0
 };
 double bendCoefficient = 4096.0;
-boolean pitchBendMSB = false;
-boolean pitchBendLSB = false;
+//boolean pitchBendMSB = false;
+//boolean pitchBendLSB = false;
+byte pitchBendChecklist = 0;
 boolean pitchBendSemi = false;
 uint8_t bendSemitones = 0;
 uint8_t bendCents = 0;
@@ -160,28 +164,50 @@ void HandleNoteOff(byte channel, byte pitch, byte velocity) {
 }
 
 void HandleControlChange(byte channel, byte number, byte value) {
-    if (number == 100 && value == 0) {
-      pitchBendMSB = true;
-      bendSemitones = 0;
-    }
-    else if (number == 101 && value == 0 && pitchBendMSB) {
-      pitchBendLSB = true;
-      pitchBendMSB = false;
-    }
-    else if (number == 6 && pitchBendLSB) {
-      bendCoefficient = 16384.0 / (double)value;
-    }
-    else if (number == 38 && bendSemitones != 0) {
-      bendCoefficient = 16384.0 / ((double)bendSemitones + ((double)bendCents / 100.0));
-      bendSemitones = 0;
-      bendCents = 0;
-    }
-    else {
-      pitchBendMSB = false;
-      pitchBendLSB = false;
-      bendSemitones = 0;
-      bendCents = 0;
-    }
+  // Handles the 4 message "Pitch Bend Range" RPN
+  if (pitchBendChecklist == 0 && number ==100 && value == 0) {
+    // maybe take off the "value == 0" this might have unforseen consequences
+    pitchBendChecklist |= 0x01;
+  } else if (pitchBendChecklist == 0x01 && number == 101 && value == 0) {
+    pitchBendChecklist |= 0x02;
+  } else if (pitchBendChecklist == 0x03 && number == 6) {
+    pitchBendChecklist |= 0x04;
+    // Calculate Pitch Bend Range in Semitones
+    bendCoefficient = 16384.0 / (double)value;
+    pitchBendChecklist = 0;
+  } /*else if (pitchBendChecklist == 0x07 && number == 38) {
+    pitchBendChecklist = 0;
+    // Add on cents to Pitch Bend Range
+    bendCoefficient += (double)(16384.0 / 100.0) * (double)value;
+  } fix later */
+  // handles other sequences of CC messages:
+  else if (pitchBendChecklist >= 0x01) {
+    pitchBendChecklist = 0;
+  }
+  
+  
+//    if (number == 100 && value == 0) {
+//      pitchBendMSB = true;
+//      bendSemitones = 0;
+//    }
+//    else if (number == 101 && value == 0 && pitchBendMSB) {
+//      pitchBendLSB = true;
+//      pitchBendMSB = false;
+//    }
+//    else if (number == 6 && pitchBendLSB) {
+//      bendCoefficient = 16384.0 / (double)value;
+//    }
+//    else if (number == 38 && bendSemitones != 0) {
+//      bendCoefficient = 16384.0 / ((double)bendSemitones + ((double)bendCents / 100.0));
+//      bendSemitones = 0;
+//      bendCents = 0;
+//    }
+//    else {
+//      pitchBendMSB = false;
+//      pitchBendLSB = false;
+//      bendSemitones = 0;
+//      bendCents = 0;
+//    }
 }
 
 void HandlePitchBend(byte channel, int amount) {
@@ -233,24 +259,23 @@ void arpAscend() {
     // noTone(SPEAKER);
     play = true;
   }
-//  if (s > 0 && play) {
-  if (s > 0) {
-    if (millis() - timer > delayFactor / 10) {
+  if (s > 0 && play) {
+    if (millis() - timer > noteGap) {
       tone(
         SPEAKER,
         440.0 * pow(2.0, (chord.getNote(i) - 69.0 + bend[c]) / 12.0)
       );
-//      play = !play;
+      play = !play;
       i++;
       i = i % s;
       timer = millis();
     }
   }
-//  if ((!play && millis() - timer > delayFactor) && s != 1) {
-//    noTone(SPEAKER);
-//    play = !play;
-//    timer = millis();
-//  }
+  if ((!play && millis() - timer > noteLength) && s != 1) {
+    noTone(SPEAKER);
+    play = !play;
+    timer = millis();
+  }
   prevbend[c] = bend[c];
 }
 
@@ -265,7 +290,7 @@ void arpDescend() {
     play = true;
   }
   if (s > 0 && play) {
-    if (millis() - timer > delayFactor / 10) {
+    if (millis() - timer > noteGap) {
       tone(
         SPEAKER,
         440.0 * pow(2.0, (chord.getNote(i) - 69.0 + bend[c]) / 12.0)
@@ -279,7 +304,7 @@ void arpDescend() {
       timer = millis();
     }
   }
-  if ((!play && millis() - timer > delayFactor) && s != 1) {
+  if ((!play && millis() - timer > noteLength) && s != 1) {
     noTone(SPEAKER);
     play = !play;
     timer = millis();
@@ -304,14 +329,14 @@ void setup() {
   i = 0;
   timer = 0;
   s = 0;
-//  bend = 0;
-//  prevbend = 0;
   play = true;
   // Set pin high for Trellis Interrupt pin
   pinMode(A2, INPUT);
   digitalWrite(A2, HIGH);
-  // Set the input for the arpeggiation speed
-  pinMode(A0, INPUT);
+  // Set the input for the arpeggiation speed and note Gap
+  pinMode(ARP_SPEED, INPUT);
+  pinMode(GAP, INPUT);
+  pinMode(STACCATO, INPUT_PULLUP);
   // Set the pinmode to PULLUP for the 5 way selector
   pinMode(AMODE_LOWEST, INPUT_PULLUP);
   pinMode(AMODE_ASCEND, INPUT_PULLUP);
@@ -350,7 +375,16 @@ void loop() {
     }
   }
   MIDI.read();
-  delayFactor = map(analogRead(ARP_SPEED),0, 1024, 10, 512);
+  if (digitalRead(STACCATO)) {
+    noteLength = map(analogRead(ARP_SPEED),0, 1024, 10, 500);
+    // Carve out the gap from the total note length.  (Preserves musical timing)
+    noteGap = map(analogRead(GAP),0, 1024, 1, (noteLength * 10) / 9);
+    noteLength = noteLength - noteGap;
+  } else {
+    noteLength = map(analogRead(ARP_SPEED),0, 1024, 10, 500);
+    noteGap = 0;
+  }
+
   if (digitalRead(AMODE_LOWEST) == LOW) {
     playLowest();
   } else if (digitalRead(AMODE_ASCEND) == LOW) {
