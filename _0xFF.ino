@@ -18,6 +18,7 @@
 #include <MIDI.h>
 #include <Chord.h>
 #include <ListNode.h>
+#include "utility.h"
 
 // For Trellis
 #include <Wire.h>
@@ -99,9 +100,6 @@ float modDepth[] = {
 };
 
 float bendCoefficient = 4096.0;
-//boolean pitchBendMSB = false;
-//boolean pitchBendLSB = false;
-byte pitchBendChecklist = 0;
 boolean pitchBendSemi = false;
 uint8_t bendSemitones = 0;
 uint8_t bendCents = 0;
@@ -155,51 +153,187 @@ void HandleNoteOff(byte channel, byte pitch, byte velocity) {
   }
 }
 
-void HandleControlChange(byte channel, byte number, byte value) {
-  // Handles the 4 message "Pitch Bend Range" RPN
-  if (pitchBendChecklist == 0 && number ==100 && value == 0) {
-    // maybe take off the "value == 0" this might have unforseen consequences
-    pitchBendChecklist |= 0x01;
-  } else if (pitchBendChecklist == 0x01 && number == 101 && value == 0) {
-    pitchBendChecklist |= 0x02;
-  } else if (pitchBendChecklist == 0x03 && number == 6) {
-    pitchBendChecklist |= 0x04;
-    // Calculate Pitch Bend Range in Semitones
-    bendCoefficient = 16384.0 / (float)value;
-    pitchBendChecklist = 0;
-  } /*else if (pitchBendChecklist == 0x07 && number == 38) {
-    pitchBendChecklist = 0;
-    // Add on cents to Pitch Bend Range
-    bendCoefficient += (float)(16384.0 / 100.0) * (float)value;
-  } fix later */
-  // handles other sequences of CC messages:
-  else if (pitchBendChecklist >= 0x01) {
-    pitchBendChecklist = 0;
+template<class State, byte MsbSelectCCNumber, byte LsbSelectCCNumber>
+class ParameterNumberParser
+{
+public:
+    ParameterNumberParser(State& inState)
+        : mState(inState)
+    {
+    }
+
+public:
+    inline void reset()
+    {
+        mState.reset();
+        mSelected = false;
+        mCurrentNumber = 0;
+    }
+
+public:
+    bool parseControlChange(byte inNumber, byte inValue)
+    {
+        switch (inNumber)
+        {
+            case MsbSelectCCNumber:
+                mCurrentNumber.mMsb = inValue;
+                break;
+            case LsbSelectCCNumber:
+                if (inValue == 0x7f && mCurrentNumber.mMsb == 0x7f)
+                {
+                    // End of Null Function, disable parser.
+                    mSelected = false;
+                }
+                else
+                {
+                    mCurrentNumber.mLsb = inValue;
+                    mSelected = mState.has(mCurrentNumber.as14bits());
+                }
+                break;
+
+            case midi::DataIncrement:
+                if (mSelected)
+                {
+                    Value& currentValue = getCurrentValue();
+                    currentValue += inValue;
+                    return true;
+                }
+                break;
+            case midi::DataDecrement:
+                if (mSelected)
+                {
+                    Value& currentValue = getCurrentValue();
+                    currentValue -= inValue;
+                    return true;
+                }
+                break;
+
+            case midi::DataEntryMSB:
+                if (mSelected)
+                {
+                    Value& currentValue = getCurrentValue();
+                    currentValue.mMsb = inValue;
+                    currentValue.mLsb = 0;
+                    return true;
+                }
+                break;
+            case midi::DataEntryLSB:
+                if (mSelected)
+                {
+                    Value& currentValue = getCurrentValue();
+                    currentValue.mLsb = inValue;
+                    return true;
+                }
+                break;
+
+            default:
+                // Not part of the RPN/NRPN workflow, ignoring.
+                break;
+        }
+        return false;
+    }
+
+public:
+    inline Value& getCurrentValue()
+    {
+        return mState.get(mCurrentNumber.as14bits());
+    }
+    inline const Value& getCurrentValue() const
+    {
+        return mState.get(mCurrentNumber.as14bits());
+    }
+
+public:
+    State& mState;
+    bool mSelected;
+    Value mCurrentNumber;
+};
+
+// --
+
+typedef State<2> RpnState;  // We'll listen to 2 RPN
+typedef State<4> NrpnState; // and 4 NRPN
+typedef ParameterNumberParser<RpnState,  midi::RPNMSB,  midi::RPNLSB>  RpnParser;
+typedef ParameterNumberParser<NrpnState, midi::NRPNMSB, midi::NRPNLSB> NrpnParser;
+
+struct ChannelSetup
+{
+    inline ChannelSetup()
+        : mRpnParser(mRpnState)
+        , mNrpnParser(mNrpnState)
+    {
+    }
+
+    inline void reset()
+    {
+        mRpnParser.reset();
+        mNrpnParser.reset();
+    }
+    inline void setup()
+    {
+        mRpnState.enable(midi::RPN::PitchBendSensitivity);
+        mRpnState.enable(midi::RPN::ModulationDepthRange);
+
+        // Enable a few random NRPNs
+        mNrpnState.enable(12);
+        mNrpnState.enable(42);
+        mNrpnState.enable(1234);
+        mNrpnState.enable(1176);
+    }
+
+    RpnState    mRpnState;
+    NrpnState   mNrpnState;
+    RpnParser   mRpnParser;
+    NrpnParser  mNrpnParser;
+};
+
+ChannelSetup sChannelSetup[16];
+
+// --
+
+void HandleControlChange(byte inChannel, byte inNumber, byte inValue) {
+  ChannelSetup& channel = sChannelSetup[inChannel];
+
+  if (inNumber == midi::ModulationWheel) {
+    modDepth[inChannel] = ((float)inValue) / 255.0;
+        
+  } else if (channel.mRpnParser.parseControlChange(inNumber, inValue)) {
+    const Value& value    = channel.mRpnParser.getCurrentValue();
+    const unsigned number = channel.mRpnParser.mCurrentNumber.as14bits();
+
+    if (number == midi::RPN::PitchBendSensitivity)
+    {
+      // Here, we use the LSB and MSB separately as they have different meaning.
+      const byte semitones    = value.mMsb;
+      const byte cents        = value.mLsb;
+    }
+    else if (number == midi::RPN::ModulationDepthRange)
+    {
+      // But here, we want the full 14 bit value.
+      const unsigned range = value.as14bits();
+    }
   }
   
-  
-//    if (number == 100 && value == 0) {
-//      pitchBendMSB = true;
-//      bendSemitones = 0;
-//    }
-//    else if (number == 101 && value == 0 && pitchBendMSB) {
-//      pitchBendLSB = true;
-//      pitchBendMSB = false;
-//    }
-//    else if (number == 6 && pitchBendLSB) {
-//      bendCoefficient = 16384.0 / (float)value;
-//    }
-//    else if (number == 38 && bendSemitones != 0) {
-//      bendCoefficient = 16384.0 / ((float)bendSemitones + ((float)bendCents / 100.0));
-//      bendSemitones = 0;
-//      bendCents = 0;
-//    }
-//    else {
-//      pitchBendMSB = false;
-//      pitchBendLSB = false;
-//      bendSemitones = 0;
-//      bendCents = 0;
-//    }
+//  // Handles the 4 message "Pitch Bend Range" RPN
+//  if (pitchBendChecklist == 0 && number ==100 && value == 0) {
+//    // maybe take off the "value == 0" this might have unforseen consequences
+//    pitchBendChecklist |= 0x01;
+//  } else if (pitchBendChecklist == 0x01 && number == 101 && value == 0) {
+//    pitchBendChecklist |= 0x02;
+//  } else if (pitchBendChecklist == 0x03 && number == 6) {
+//    pitchBendChecklist |= 0x04;
+//    // Calculate Pitch Bend Range in Semitones
+//    bendCoefficient = 16384.0 / (float)value;
+//    pitchBendChecklist = 0;
+//  } /*else if (pitchBendChecklist == 0x07 && number == 38) {
+//    pitchBendChecklist = 0;
+//    // Add on cents to Pitch Bend Range
+//    bendCoefficient += (float)(16384.0 / 100.0) * (float)value;
+//  } fix later */
+//  // handles other sequences of CC messages:
+//  else if (pitchBendChecklist >= 0x01) {
+//    pitchBendChecklist = 0;
+//  }
 }
 
 void HandlePitchBend(byte channel, int amount) {
