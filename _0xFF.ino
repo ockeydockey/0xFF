@@ -1,13 +1,17 @@
 /***************************************************
 * Created by David Ockey
-* (C) 2011 - 2015
+* (C) 2011 - 2018
 ****************************************************
+* Uses Arduino MIDI libary 4.0, by Francois Best
+* 
 * Features:
 * [ ] 16 Channel selector button matrix
 * [ ] 5 arpeggiation modes
 * [ ] Adjustable arpeggiation
+* [ ] Adjustable staccato mode for arpeggiation modes
 * [ ] Per-channel pitch bending
 * [o] Adjustable pitch bend according to GM spec
+* [o] Modulation LFO
 ***************************************************/
 
 // For MIDI
@@ -19,10 +23,19 @@
 #include <Wire.h>
 #include "Adafruit_Trellis.h"
 
-// Hardware assignments
+// For Tone
+//#include <NewTone.h>
+
+/*******************************
+* Hardware pin assignments
+*******************************/
+// Speaker output pin
 #define SPEAKER 4
+// Staccato enable switch
 #define STACCATO 8
+// Arpeggiation speed dial
 #define ARP_SPEED A0
+// Staccato gap length dial
 #define GAP A1
 
 /*******************************
@@ -48,71 +61,50 @@ unsigned long int wait = millis() + 30;
 int s;
 byte c;
 byte current[] = {255, 255};
-boolean play;
+boolean playing;
 boolean chanEnable[] = {
-  false,
-  true,    // There are 17 indexes to make 1-16 available.  This saves on math.
-  false,
-  false,
-  false,
-  false,
-  false,
-  false,
-  false,
-  false,
-  false,
-  false,
-  false,
-  false,
-  false,
-  false,
-  false
+  false, // There are 17 indexes to make 1-16 available for each MIDI channel.  This saves on math.
+  true,  false, false, false,
+  false, false, false, false,
+  false, false, false, false,
+  false, false, false, false
 };
-double bend[] = {
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0
+
+// 16 channels of pitch bend values
+float bend[] = {
+  0, // There are 17 indexes to make 1-16 available for each MIDI channel.  This saves on math.
+  0, 0, 0, 0,
+  0, 0, 0, 0,
+  0, 0, 0, 0,
+  0, 0, 0, 0
 };
-double prevbend[] = {
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0,
-  0
+
+// 16 channels of previous bend values to know if the CC has changed
+float prevbend[] = {
+  0, // There are 17 indexes to make 1-16 available for each MIDI channel.  This saves on math.
+  0, 0, 0, 0,
+  0, 0, 0, 0,
+  0, 0, 0, 0,
+  0, 0, 0, 0
 };
-double bendCoefficient = 4096.0;
+
+float modDepth[] = {
+  0, // There are 17 indexes to make 1-16 available for each MIDI channel.  This saves on math.
+  0, 0, 0, 0,
+  0, 0, 0, 0,
+  0, 0, 0, 0,
+  0, 0, 0, 0
+};
+
+float bendCoefficient = 4096.0;
 //boolean pitchBendMSB = false;
 //boolean pitchBendLSB = false;
 byte pitchBendChecklist = 0;
 boolean pitchBendSemi = false;
 uint8_t bendSemitones = 0;
 uint8_t bendCents = 0;
+float mod = 0;
+float prevMod = 0;
 
 Adafruit_Trellis matrix0 = Adafruit_Trellis();
 Adafruit_TrellisSet trellis = Adafruit_TrellisSet(&matrix0);
@@ -138,18 +130,17 @@ void HandleNoteOn(byte channel, byte pitch, byte velocity) {
       chord.addNote((int)pitch, channel);
       current[0] = pitch;
       current[1] = channel;
-    }
-    else {
+    } else {
       HandleNoteOff(channel, pitch, velocity);
     }
   }
 }
 
 void HandleNoteOff(byte channel, byte pitch, byte velocity) {
-  if (chord.removeNote(pitch) <= i) {
+  if (chord.removeNote(pitch, channel) <= i) {
     if (i > 0) {
       i--;
-    } else {
+    } else { // accounts for counting errors
       i = 0;
     }
   }
@@ -159,7 +150,6 @@ void HandleNoteOff(byte channel, byte pitch, byte velocity) {
   }
   if (chord.getSize() == 0) {
     noTone(SPEAKER);
-    play = true;
   }
 }
 
@@ -173,12 +163,12 @@ void HandleControlChange(byte channel, byte number, byte value) {
   } else if (pitchBendChecklist == 0x03 && number == 6) {
     pitchBendChecklist |= 0x04;
     // Calculate Pitch Bend Range in Semitones
-    bendCoefficient = 16384.0 / (double)value;
+    bendCoefficient = 16384.0 / (float)value;
     pitchBendChecklist = 0;
   } /*else if (pitchBendChecklist == 0x07 && number == 38) {
     pitchBendChecklist = 0;
     // Add on cents to Pitch Bend Range
-    bendCoefficient += (double)(16384.0 / 100.0) * (double)value;
+    bendCoefficient += (float)(16384.0 / 100.0) * (float)value;
   } fix later */
   // handles other sequences of CC messages:
   else if (pitchBendChecklist >= 0x01) {
@@ -195,10 +185,10 @@ void HandleControlChange(byte channel, byte number, byte value) {
 //      pitchBendMSB = false;
 //    }
 //    else if (number == 6 && pitchBendLSB) {
-//      bendCoefficient = 16384.0 / (double)value;
+//      bendCoefficient = 16384.0 / (float)value;
 //    }
 //    else if (number == 38 && bendSemitones != 0) {
-//      bendCoefficient = 16384.0 / ((double)bendSemitones + ((double)bendCents / 100.0));
+//      bendCoefficient = 16384.0 / ((float)bendSemitones + ((float)bendCents / 100.0));
 //      bendSemitones = 0;
 //      bendCents = 0;
 //    }
@@ -213,23 +203,31 @@ void HandleControlChange(byte channel, byte number, byte value) {
 void HandlePitchBend(byte channel, int amount) {
   //if (channel == 1) {
   // Yamaha XG compliant
-   bend[channel] = ((double)amount) / bendCoefficient;
-  // bend = ((double)amount) / 819.2;
-  // bend = ((double)amount) / 767.0;
-  // bend = ((double)amount) / 700;
-  // bend = ((double)amount) / 660.0;
+  bend[channel] = ((float)amount) / bendCoefficient;
+  // bend = ((float)amount) / 819.2;
+  // bend = ((float)amount) / 767.0;
+  // bend = ((float)amount) / 700;
+  // bend = ((float)amount) / 660.0;
   // Calibrated to (Voodoo - Jimmy Hendrix - XG.mid).  This should be true for all Yamaha XG.
-  // bend = ((double)amount) / 655.0;
+  // bend = ((float)amount) / 655.0;
   //}
 }
 
+inline float calcModulation(byte channel) {
+  // Implements a single instruction byte mask to replace a more costly modulus of 256
+  // Using 1 step per 2 milliseconds on a 256 step sine wave gives a period of 256/1000 of a second (or about 1/4 second)
+  // Adjust the milliseconds to degrees, then convert to radians by multiplying by 0.0174533
+  return sin(0.0174533 * ((360 * ((millis() & 0xFE)) >> 1) / 256)) * modDepth[ channel ];
+}
+
+// Lowest note priority (monophonic)
 void playLowest() {
   s = chord.getSize();
   c = chord.getLowestNoteChannel();
   if (s > 0 && chord.getLowestNote() > 0) {
     tone(
       SPEAKER,
-      440.0 * pow(2.0, (chord.getLowestNote() - 69.0 + bend[c]) / 12.0)
+      440.0 * pow(2.0, (chord.getLowestNote() - 69.0 + bend[c] + calcModulation(c)) / 12.0)
     );
     timer = millis();
   } else if (s == 0) {
@@ -237,6 +235,7 @@ void playLowest() {
   }
 }
 
+// Highest note priority (monophonic)
 void playHighest() {
   s = chord.getSize();
   c = chord.getHighestNoteChannel();
@@ -244,7 +243,7 @@ void playHighest() {
   if (s > 0 && chord.getHighestNote() > 0) {
     tone(
       SPEAKER,
-      440.0 * pow(2.0, (chord.getHighestNote() - 69.0 + bend[c]) / 12.0)
+      440.0 * pow(2.0, (chord.getHighestNote() - 69.0 + bend[c] + calcModulation(c)) / 12.0)
     );
     timer = millis();
   } else if (s == 0) {
@@ -253,70 +252,105 @@ void playHighest() {
 }  
 
 void arpAscend() {
+  bool change = false;
   s = chord.getSize();
-  c = chord.getChannel(i);
-  if (prevbend[c] != bend[c] && s == 1) {
-    // noTone(SPEAKER);
-    play = true;
+  // If the current note index is bigger than the chord size
+  if (i >= s) {
+    i = 0;
   }
-  if (s > 0 && play) {
-    if (millis() - timer > noteGap) {
+  c = chord.getChannel(i);
+  mod = calcModulation(c);
+
+  // If the chord size is greater than 0
+  if (s > 0) {
+    // If not palying a note, and the note gap timer is up
+    if (!playing && ((long)(millis() - timer) >= 0)) {
+      // Set timeout for current note duration
+      timer = millis() + noteLength;
+      playing = true;
+      change = true;
+    } else if (prevbend[c] != bend[c]) {
+      change = true;
+    } else if (prevMod != mod) {
+      change = true;
+    }
+  
+    if (playing && change) {
       tone(
         SPEAKER,
-        440.0 * pow(2.0, (chord.getNote(i) - 69.0 + bend[c]) / 12.0)
+        440.0 * pow(2.0, (chord.getNote(i) - 69.0 + bend[c] + mod) /12.0)
       );
-      play = !play;
-      i++;
-      i = i % s;
-      timer = millis();
     }
   }
-  if ((!play && millis() - timer > noteLength) && s != 1) {
+
+  if (playing && s != 1 && ((long)(millis() - timer) >= 0)) {
     noTone(SPEAKER);
-    play = !play;
-    timer = millis();
+    // Set timeout for gap between notes
+    timer = millis + noteGap;
+
+    // Prepare to play next note
+    playing = false;
+    i++;
   }
+
+  // Update previous values
   prevbend[c] = bend[c];
+  prevMod = mod;
 }
 
 void arpDescend() {
+  bool change = false;
   s = chord.getSize();
-  if (i > s) {
-    i = s;
+  // If the current note index is bigger than the chord size
+  if (i >= s) {
+    i = 0;
   }
-  c = chord.getChannel(i);
-  if (prevbend[c] != bend[c] && s == 1) {
-    // noTone(SPEAKER);
-    play = true;
-  }
-  if (s > 0 && play) {
-    if (millis() - timer > noteGap) {
+  c = chord.getChannel(i, true);
+  mod = calcModulation(c);
+
+  // If the chord size is greater than 0
+  if (s > 0) {
+    // If not palying a note, and the note gap timer is up
+    if (!playing && ((long)(millis() - timer) >= 0)) {
+      // Set timeout for current note duration
+      timer = millis() + noteLength;
+      playing = true;
+      change = true;
+    } else if (prevbend[c] != bend[c]) {
+      change = true;
+    } else if (prevMod != mod) {
+      change = true;
+    }
+  
+    if (playing && change) {
       tone(
         SPEAKER,
-        440.0 * pow(2.0, (chord.getNote(i) - 69.0 + bend[c]) / 12.0)
+        440.0 * pow(2.0, (chord.getNote(i, true) - 69.0 + bend[c] + mod) /12.0)
       );
-      play = !play;
-      i--;
-      if (i < 0) {
-        //i = i % s;
-        i = s;
-      }
-      timer = millis();
     }
   }
-  if ((!play && millis() - timer > noteLength) && s != 1) {
+
+  if (playing && s != 1 && ((long)(millis() - timer) >= 0)) {
     noTone(SPEAKER);
-    play = !play;
-    timer = millis();
+    // Set timeout for gap between notes
+    timer = millis + noteGap;
+
+    // Prepare to play next note
+    playing = false;
+    i++;
   }
+
+  // Update previous values
   prevbend[c] = bend[c];
+  prevMod = mod;
 }
 
+// Most recent note priority (monophonic)
 void playCurrent() {
   if (current[0] < 255 && current[1] < 255) {
     tone(
         SPEAKER,
-        440.0 * pow(2.0, (current[0] - 69.0 + bend[current[1]]) / 12.0)
+        440.0 * pow(2.0, (current[0] - 69.0 + bend[current[1]] + calcModulation(current[1])) / 12.0)
       );
     timer = millis();
   } else {
@@ -329,7 +363,7 @@ void setup() {
   i = 0;
   timer = 0;
   s = 0;
-  play = true;
+  playing = false;
   // Set pin high for Trellis Interrupt pin
   pinMode(A2, INPUT);
   digitalWrite(A2, HIGH);
