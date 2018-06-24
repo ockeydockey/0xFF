@@ -2,7 +2,7 @@
 * Created by David Ockey
 * (C) 2011 - 2018
 ****************************************************
-* Uses Arduino MIDI libary 4.0, by Francois Best
+* Uses Arduino MIDI libary 4.3.1, by FortySevenEffects
 * 
 * Features:
 * [ ] 16 Channel selector button matrix
@@ -51,6 +51,8 @@
 #define AMODE_DESCEND 12
 // High Priority
 #define AMODE_HIGHEST 13
+
+MIDI_CREATE_DEFAULT_INSTANCE();
 
 Chord chord;
 uint8_t i;
@@ -359,7 +361,6 @@ void playCurrent() {
 }
 
 void setup() { 
-  MIDI.begin(MIDI_CHANNEL_OMNI);
   i = 0;
   timer = 0;
   s = 0;
@@ -382,6 +383,7 @@ void setup() {
   MIDI.setHandleNoteOff(HandleNoteOff);
   MIDI.setHandlePitchBend(HandlePitchBend);
   MIDI.setHandleControlChange(HandleControlChange);
+  MIDI.begin(MIDI_CHANNEL_OMNI);
   
   trellis.begin(0x70);
   for (uint8_t i = 0; i < 16; i++) {
