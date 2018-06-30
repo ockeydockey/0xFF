@@ -24,6 +24,9 @@
 #include <Wire.h>
 #include "Adafruit_Trellis.h"
 
+// For LFO
+#include "LFOWaveforms.h"
+
 // For Tone
 //#include <NewTone.h>
 
@@ -295,7 +298,8 @@ void HandleControlChange(byte inChannel, byte inNumber, byte inValue) {
   ChannelSetup& channel = sChannelSetup[inChannel];
 
   if (inNumber == midi::ModulationWheel) {
-    modDepth[inChannel] = ((float)inValue) / 255.0;
+    // Modulation Wheel has a range of 0 - 127 (according to MIDI spec)
+    modDepth[inChannel] = ((float)inValue) / 127.0;
         
   } else if (channel.mRpnParser.parseControlChange(inNumber, inValue)) {
     const Value& value    = channel.mRpnParser.getCurrentValue();
@@ -353,7 +357,7 @@ inline float calcModulation(byte channel) {
   // Implements a single instruction byte mask to replace a more costly modulus of 256
   // Using 1 step per 2 milliseconds on a 256 step sine wave gives a period of 256/1000 of a second (or about 1/4 second)
   // Adjust the milliseconds to degrees, then convert to radians by multiplying by 0.0174533
-  return sin(0.0174533 * ((360 * ((millis() & 0xFE)) >> 1) / 256)) * modDepth[ channel ];
+  return pgm_read_float(&lfo_sine256[ (millis() & 0xFE) ]) * modDepth[ channel ];
 }
 
 // Lowest note priority (monophonic)
