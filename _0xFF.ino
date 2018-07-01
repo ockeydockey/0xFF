@@ -11,7 +11,7 @@
 * [ ] Adjustable staccato mode for arpeggiation modes
 * [ ] Per-channel pitch bending
 * [o] Adjustable pitch bend according to GM spec
-* [o] Modulation LFO
+* [ ] Modulation LFO
 ***************************************************/
 
 // For MIDI
@@ -28,7 +28,7 @@
 #include "LFOWaveforms.h"
 
 // For Tone
-//#include <NewTone.h>
+#include <NewTone.h>
 
 /*******************************
 * Hardware pin assignments
@@ -58,15 +58,21 @@
 
 MIDI_CREATE_DEFAULT_INSTANCE();
 
+typedef struct note_t {
+  byte note;
+  byte channel;
+} Note;
+
 Chord chord;
 uint8_t i;
 unsigned int noteGap;
 unsigned int noteLength;
 unsigned long timer;
 unsigned long int wait = millis() + 30;
-int s;
-byte c;
-byte current[] = {255, 255};
+volatile unsigned int s;
+volatile byte c;
+volatile bool change = false;
+Note current;
 boolean playing;
 boolean chanEnable[] = {
   false, // There are 17 indexes to make 1-16 available for each MIDI channel.  This saves on math.
@@ -130,9 +136,9 @@ void updateChannels() {
 void HandleNoteOn(byte channel, byte pitch, byte velocity) {
   if (chanEnable[channel]) {
     if (velocity != 0) {
-      chord.addNote((int)pitch, channel);
-      current[0] = pitch;
-      current[1] = channel;
+      chord.addNote(pitch, channel);
+      current.note = pitch;
+      current.channel = channel;
     } else {
       HandleNoteOff(channel, pitch, velocity);
     }
@@ -140,182 +146,184 @@ void HandleNoteOn(byte channel, byte pitch, byte velocity) {
 }
 
 void HandleNoteOff(byte channel, byte pitch, byte velocity) {
-  if (chord.removeNote(pitch, channel) <= i) {
-    if (i > 0) {
-      i--;
-    } else { // accounts for counting errors
-      i = 0;
-    }
+  chord.removeNote(pitch, channel); // returns bool if debugging is needed
+
+  if (current.note == pitch && current.channel == channel) {
+    current.note = 255;
+    current.channel = 255;
   }
-  if (current[0] == pitch && current[1] == channel) {
-    current[0] = 255;
-    current[1] = 255;
-  }
+  
   if (chord.getSize() == 0) {
+#ifdef NewTone_h
+    noNewTone(SPEAKER);
+#else
     noTone(SPEAKER);
+#endif
   }
+
+  change = true;
 }
 
-template<class State, byte MsbSelectCCNumber, byte LsbSelectCCNumber>
-class ParameterNumberParser
-{
-public:
-    ParameterNumberParser(State& inState)
-        : mState(inState)
-    {
-    }
-
-public:
-    inline void reset()
-    {
-        mState.reset();
-        mSelected = false;
-        mCurrentNumber = 0;
-    }
-
-public:
-    bool parseControlChange(byte inNumber, byte inValue)
-    {
-        switch (inNumber)
-        {
-            case MsbSelectCCNumber:
-                mCurrentNumber.mMsb = inValue;
-                break;
-            case LsbSelectCCNumber:
-                if (inValue == 0x7f && mCurrentNumber.mMsb == 0x7f)
-                {
-                    // End of Null Function, disable parser.
-                    mSelected = false;
-                }
-                else
-                {
-                    mCurrentNumber.mLsb = inValue;
-                    mSelected = mState.has(mCurrentNumber.as14bits());
-                }
-                break;
-
-            case midi::DataIncrement:
-                if (mSelected)
-                {
-                    Value& currentValue = getCurrentValue();
-                    currentValue += inValue;
-                    return true;
-                }
-                break;
-            case midi::DataDecrement:
-                if (mSelected)
-                {
-                    Value& currentValue = getCurrentValue();
-                    currentValue -= inValue;
-                    return true;
-                }
-                break;
-
-            case midi::DataEntryMSB:
-                if (mSelected)
-                {
-                    Value& currentValue = getCurrentValue();
-                    currentValue.mMsb = inValue;
-                    currentValue.mLsb = 0;
-                    return true;
-                }
-                break;
-            case midi::DataEntryLSB:
-                if (mSelected)
-                {
-                    Value& currentValue = getCurrentValue();
-                    currentValue.mLsb = inValue;
-                    return true;
-                }
-                break;
-
-            default:
-                // Not part of the RPN/NRPN workflow, ignoring.
-                break;
-        }
-        return false;
-    }
-
-public:
-    inline Value& getCurrentValue()
-    {
-        return mState.get(mCurrentNumber.as14bits());
-    }
-    inline const Value& getCurrentValue() const
-    {
-        return mState.get(mCurrentNumber.as14bits());
-    }
-
-public:
-    State& mState;
-    bool mSelected;
-    Value mCurrentNumber;
-};
-
-// --
-
-typedef State<2> RpnState;  // We'll listen to 2 RPN
-typedef State<4> NrpnState; // and 4 NRPN
-typedef ParameterNumberParser<RpnState,  midi::RPNMSB,  midi::RPNLSB>  RpnParser;
-typedef ParameterNumberParser<NrpnState, midi::NRPNMSB, midi::NRPNLSB> NrpnParser;
-
-struct ChannelSetup
-{
-    inline ChannelSetup()
-        : mRpnParser(mRpnState)
-        , mNrpnParser(mNrpnState)
-    {
-    }
-
-    inline void reset()
-    {
-        mRpnParser.reset();
-        mNrpnParser.reset();
-    }
-    inline void setup()
-    {
-        mRpnState.enable(midi::RPN::PitchBendSensitivity);
-        mRpnState.enable(midi::RPN::ModulationDepthRange);
-
-        // Enable a few random NRPNs
-        mNrpnState.enable(12);
-        mNrpnState.enable(42);
-        mNrpnState.enable(1234);
-        mNrpnState.enable(1176);
-    }
-
-    RpnState    mRpnState;
-    NrpnState   mNrpnState;
-    RpnParser   mRpnParser;
-    NrpnParser  mNrpnParser;
-};
-
-ChannelSetup sChannelSetup[16];
-
-// --
+//template<class State, byte MsbSelectCCNumber, byte LsbSelectCCNumber>
+//class ParameterNumberParser
+//{
+//public:
+//    ParameterNumberParser(State& inState)
+//        : mState(inState)
+//    {
+//    }
+//
+//public:
+//    inline void reset()
+//    {
+//        mState.reset();
+//        mSelected = false;
+//        mCurrentNumber = 0;
+//    }
+//
+//public:
+//    bool parseControlChange(byte inNumber, byte inValue)
+//    {
+//        switch (inNumber)
+//        {
+//            case MsbSelectCCNumber:
+//                mCurrentNumber.mMsb = inValue;
+//                break;
+//            case LsbSelectCCNumber:
+//                if (inValue == 0x7f && mCurrentNumber.mMsb == 0x7f)
+//                {
+//                    // End of Null Function, disable parser.
+//                    mSelected = false;
+//                }
+//                else
+//                {
+//                    mCurrentNumber.mLsb = inValue;
+//                    mSelected = mState.has(mCurrentNumber.as14bits());
+//                }
+//                break;
+//
+//            case midi::DataIncrement:
+//                if (mSelected)
+//                {
+//                    Value& currentValue = getCurrentValue();
+//                    currentValue += inValue;
+//                    return true;
+//                }
+//                break;
+//            case midi::DataDecrement:
+//                if (mSelected)
+//                {
+//                    Value& currentValue = getCurrentValue();
+//                    currentValue -= inValue;
+//                    return true;
+//                }
+//                break;
+//
+//            case midi::DataEntryMSB:
+//                if (mSelected)
+//                {
+//                    Value& currentValue = getCurrentValue();
+//                    currentValue.mMsb = inValue;
+//                    currentValue.mLsb = 0;
+//                    return true;
+//                }
+//                break;
+//            case midi::DataEntryLSB:
+//                if (mSelected)
+//                {
+//                    Value& currentValue = getCurrentValue();
+//                    currentValue.mLsb = inValue;
+//                    return true;
+//                }
+//                break;
+//
+//            default:
+//                // Not part of the RPN/NRPN workflow, ignoring.
+//                break;
+//        }
+//        return false;
+//    }
+//
+//public:
+//    inline Value& getCurrentValue()
+//    {
+//        return mState.get(mCurrentNumber.as14bits());
+//    }
+//    inline const Value& getCurrentValue() const
+//    {
+//        return mState.get(mCurrentNumber.as14bits());
+//    }
+//
+//public:
+//    State& mState;
+//    bool mSelected;
+//    Value mCurrentNumber;
+//};
+//
+//// --
+//
+//typedef State<2> RpnState;  // We'll listen to 2 RPN
+//typedef State<4> NrpnState; // and 4 NRPN
+//typedef ParameterNumberParser<RpnState,  midi::RPNMSB,  midi::RPNLSB>  RpnParser;
+//typedef ParameterNumberParser<NrpnState, midi::NRPNMSB, midi::NRPNLSB> NrpnParser;
+//
+//struct ChannelSetup
+//{
+//    inline ChannelSetup()
+//        : mRpnParser(mRpnState)
+//        , mNrpnParser(mNrpnState)
+//    {
+//    }
+//
+//    inline void reset()
+//    {
+//        mRpnParser.reset();
+//        mNrpnParser.reset();
+//    }
+//    inline void setup()
+//    {
+//        mRpnState.enable(midi::RPN::PitchBendSensitivity);
+//        mRpnState.enable(midi::RPN::ModulationDepthRange);
+//
+//        // Enable a few random NRPNs
+//        mNrpnState.enable(12);
+//        mNrpnState.enable(42);
+//        mNrpnState.enable(1234);
+//        mNrpnState.enable(1176);
+//    }
+//
+//    RpnState    mRpnState;
+//    NrpnState   mNrpnState;
+//    RpnParser   mRpnParser;
+//    NrpnParser  mNrpnParser;
+//};
+//
+//ChannelSetup sChannelSetup[16];
+//
+//// --
 
 void HandleControlChange(byte inChannel, byte inNumber, byte inValue) {
-  ChannelSetup& channel = sChannelSetup[inChannel];
+//  ChannelSetup& channel = sChannelSetup[inChannel];
 
   if (inNumber == midi::ModulationWheel) {
     // Modulation Wheel has a range of 0 - 127 (according to MIDI spec)
-    modDepth[inChannel] = ((float)inValue) / 127.0;
+    modDepth[inChannel] = ((float)inValue) / 256.0;
         
-  } else if (channel.mRpnParser.parseControlChange(inNumber, inValue)) {
-    const Value& value    = channel.mRpnParser.getCurrentValue();
-    const unsigned number = channel.mRpnParser.mCurrentNumber.as14bits();
-
-    if (number == midi::RPN::PitchBendSensitivity)
-    {
-      // Here, we use the LSB and MSB separately as they have different meaning.
-      const byte semitones    = value.mMsb;
-      const byte cents        = value.mLsb;
-    }
-    else if (number == midi::RPN::ModulationDepthRange)
-    {
-      // But here, we want the full 14 bit value.
-      const unsigned range = value.as14bits();
-    }
+//  } else if (channel.mRpnParser.parseControlChange(inNumber, inValue)) {
+//    const Value& value    = channel.mRpnParser.getCurrentValue();
+//    const unsigned number = channel.mRpnParser.mCurrentNumber.as14bits();
+//
+//    if (number == midi::RPN::PitchBendSensitivity)
+//    {
+//      // Here, we use the LSB and MSB separately as they have different meaning.
+//      const byte semitones    = value.mMsb;
+//      const byte cents        = value.mLsb;
+//    }
+//    else if (number == midi::RPN::ModulationDepthRange)
+//    {
+//      // But here, we want the full 14 bit value.
+//      const unsigned range = value.as14bits();
+//    }
   }
   
 //  // Handles the 4 message "Pitch Bend Range" RPN
@@ -355,24 +363,32 @@ void HandlePitchBend(byte channel, int amount) {
 
 inline float calcModulation(byte channel) {
   // Implements a single instruction byte mask to replace a more costly modulus of 256
-  // Using 1 step per 2 milliseconds on a 256 step sine wave gives a period of 256/1000 of a second (or about 1/4 second)
-  // Adjust the milliseconds to degrees, then convert to radians by multiplying by 0.0174533
-  return pgm_read_float(&lfo_sine256[ (millis() & 0xFE) ]) * modDepth[ channel ];
+  // Using 1 step per millisecond on a 256 step sine wave gives a period of 256/1000 of a second (or about 1/4 second)
+  return pgm_read_float(&lfo_sine256[ (millis() & 0xFF) ]) * modDepth[ channel ];
 }
 
 // Lowest note priority (monophonic)
 void playLowest() {
   s = chord.getSize();
   c = chord.getLowestNoteChannel();
-  if (s > 0 && chord.getLowestNote() > 0) {
+  if (s > 0 && chord.getLowestNote() >= 0) {
+#ifdef NewTone_h
+    NewTone(
+#else
     tone(
+#endif
       SPEAKER,
-      440.0 * pow(2.0, (chord.getLowestNote() - 69.0 + bend[c] + calcModulation(c)) / 12.0)
+      440.0 * pow(2.0, ((chord.getLowestNote() - 69.0) + bend[c] + calcModulation(c)) / 12.0)
     );
     timer = millis();
   } else if (s == 0) {
+#ifdef NewTone_h
+    noNewTone(SPEAKER);
+#else
     noTone(SPEAKER);
+#endif
   }
+  change = false;
 }
 
 // Highest note priority (monophonic)
@@ -380,19 +396,27 @@ void playHighest() {
   s = chord.getSize();
   c = chord.getHighestNoteChannel();
 
-  if (s > 0 && chord.getHighestNote() > 0) {
+  if (s > 0 && chord.getHighestNote() >= 0) {
+#ifdef NewTone_h
+    NewTone(
+#else
     tone(
+#endif
       SPEAKER,
-      440.0 * pow(2.0, (chord.getHighestNote() - 69.0 + bend[c] + calcModulation(c)) / 12.0)
+      440.0 * pow(2.0, ((chord.getHighestNote() - 69.0) + bend[c] + calcModulation(c)) / 12.0)
     );
     timer = millis();
   } else if (s == 0) {
+#ifdef NewTone_h
+    noNewTone(SPEAKER);
+#else
     noTone(SPEAKER);
+#endif
   }
+  change = false;
 }  
 
 void arpAscend() {
-  bool change = false;
   s = chord.getSize();
   // If the current note index is bigger than the chord size
   if (i >= s) {
@@ -416,15 +440,29 @@ void arpAscend() {
     }
   
     if (playing && change) {
+#ifdef NewTone_h
+    NewTone(
+#else
       tone(
+#endif
         SPEAKER,
         440.0 * pow(2.0, (chord.getNote(i) - 69.0 + bend[c] + mod) /12.0)
       );
     }
+  } else {
+#ifdef NewTone_h
+    noNewTone(SPEAKER);
+#else
+    noTone(SPEAKER);
+#endif
   }
 
   if (playing && s != 1 && ((long)(millis() - timer) >= 0)) {
+#ifdef NewTone_h
+    noNewTone(SPEAKER);
+#else
     noTone(SPEAKER);
+#endif
     // Set timeout for gap between notes
     timer = millis + noteGap;
 
@@ -436,10 +474,10 @@ void arpAscend() {
   // Update previous values
   prevbend[c] = bend[c];
   prevMod = mod;
+  change = false;
 }
 
 void arpDescend() {
-  bool change = false;
   s = chord.getSize();
   // If the current note index is bigger than the chord size
   if (i >= s) {
@@ -463,7 +501,11 @@ void arpDescend() {
     }
   
     if (playing && change) {
+#ifdef NewTone_h
+      NewTone(
+#else
       tone(
+#endif
         SPEAKER,
         440.0 * pow(2.0, (chord.getNote(i, true) - 69.0 + bend[c] + mod) /12.0)
       );
@@ -471,7 +513,11 @@ void arpDescend() {
   }
 
   if (playing && s != 1 && ((long)(millis() - timer) >= 0)) {
+#ifdef NewTone_h
+    noNewTone(SPEAKER);
+#else
     noTone(SPEAKER);
+#endif
     // Set timeout for gap between notes
     timer = millis + noteGap;
 
@@ -483,19 +529,29 @@ void arpDescend() {
   // Update previous values
   prevbend[c] = bend[c];
   prevMod = mod;
+  change = false;
 }
 
 // Most recent note priority (monophonic)
 void playCurrent() {
-  if (current[0] < 255 && current[1] < 255) {
+  if (current.note < 255 && current.channel < 255) {
+#ifdef NewTone_h
+    NewTone(
+#else
     tone(
+#endif
         SPEAKER,
-        440.0 * pow(2.0, (current[0] - 69.0 + bend[current[1]] + calcModulation(current[1])) / 12.0)
+        440.0 * pow(2.0, (current.note - 69.0 + bend[current.channel] + calcModulation(current.channel)) / 12.0)
       );
     timer = millis();
   } else {
+#ifdef NewTone_h
+    noNewTone(SPEAKER);
+#else
     noTone(SPEAKER);
+#endif
   }
+  change = false;
 }
 
 void setup() { 
@@ -570,6 +626,10 @@ void loop() {
   } else if (digitalRead(AMODE_HIGHEST) == LOW) {
     playHighest();
   } else {
+#ifdef NewTone_h
+    noNewTone(SPEAKER);
+#else
     noTone(SPEAKER);
+#endif
   }
 }
