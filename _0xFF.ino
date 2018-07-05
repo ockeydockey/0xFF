@@ -63,17 +63,29 @@ typedef struct note_t {
   byte channel;
 } Note;
 
+typedef struct sensitivity_t {
+  byte semitones;
+  byte cents;
+} Sensitivity;
+
 Chord chord;
-uint8_t i;
+// Settings
 unsigned int noteGap;
 unsigned int noteLength;
+Sensitivity bendSensitivity;
+
+// Current conditions
 unsigned long timer;
 unsigned long int wait = millis() + 30;
+uint8_t i;
 volatile unsigned int s;
 volatile byte c;
 volatile bool change = false;
 Note current;
 boolean playing;
+float mod = 0;
+float prevMod = 0;
+
 boolean chanEnable[] = {
   false, // There are 17 indexes to make 1-16 available for each MIDI channel.  This saves on math.
   true,  false, false, false,
@@ -108,15 +120,27 @@ float modDepth[] = {
   0, 0, 0, 0
 };
 
-float bendCoefficient = 4096.0;
-boolean pitchBendSemi = false;
-uint8_t bendSemitones = 0;
-uint8_t bendCents = 0;
-float mod = 0;
-float prevMod = 0;
-
 Adafruit_Trellis matrix0 = Adafruit_Trellis();
 Adafruit_TrellisSet trellis = Adafruit_TrellisSet(&matrix0);
+
+inline void playNote(int note, byte channel) { // inline used to reduce instruction/stack overhead for function
+#ifdef NewTone_h
+  NewTone(
+#else
+  tone(
+#endif
+    SPEAKER,
+    440.0 * pow(2.0, ((note - 69.0) + bend[channel] + calcModulation(channel)) / 12.0)
+  );
+}
+
+inline void stopNote() { // inline used to reduce instruction/stack overhead for function
+#ifdef NewTone_h
+  noNewTone(SPEAKER);
+#else
+  noTone(SPEAKER);
+#endif
+}
 
 void updateChannels() {
   for (uint8_t i = 0; i < 16; i++) {
@@ -154,211 +178,177 @@ void HandleNoteOff(byte channel, byte pitch, byte velocity) {
   }
   
   if (chord.getSize() == 0) {
-#ifdef NewTone_h
-    noNewTone(SPEAKER);
-#else
-    noTone(SPEAKER);
-#endif
+    stopNote();
   }
 
   change = true;
 }
 
-//template<class State, byte MsbSelectCCNumber, byte LsbSelectCCNumber>
-//class ParameterNumberParser
-//{
-//public:
-//    ParameterNumberParser(State& inState)
-//        : mState(inState)
-//    {
-//    }
-//
-//public:
-//    inline void reset()
-//    {
-//        mState.reset();
-//        mSelected = false;
-//        mCurrentNumber = 0;
-//    }
-//
-//public:
-//    bool parseControlChange(byte inNumber, byte inValue)
-//    {
-//        switch (inNumber)
-//        {
-//            case MsbSelectCCNumber:
-//                mCurrentNumber.mMsb = inValue;
-//                break;
-//            case LsbSelectCCNumber:
-//                if (inValue == 0x7f && mCurrentNumber.mMsb == 0x7f)
-//                {
-//                    // End of Null Function, disable parser.
-//                    mSelected = false;
-//                }
-//                else
-//                {
-//                    mCurrentNumber.mLsb = inValue;
-//                    mSelected = mState.has(mCurrentNumber.as14bits());
-//                }
-//                break;
-//
-//            case midi::DataIncrement:
-//                if (mSelected)
-//                {
-//                    Value& currentValue = getCurrentValue();
-//                    currentValue += inValue;
-//                    return true;
-//                }
-//                break;
-//            case midi::DataDecrement:
-//                if (mSelected)
-//                {
-//                    Value& currentValue = getCurrentValue();
-//                    currentValue -= inValue;
-//                    return true;
-//                }
-//                break;
-//
-//            case midi::DataEntryMSB:
-//                if (mSelected)
-//                {
-//                    Value& currentValue = getCurrentValue();
-//                    currentValue.mMsb = inValue;
-//                    currentValue.mLsb = 0;
-//                    return true;
-//                }
-//                break;
-//            case midi::DataEntryLSB:
-//                if (mSelected)
-//                {
-//                    Value& currentValue = getCurrentValue();
-//                    currentValue.mLsb = inValue;
-//                    return true;
-//                }
-//                break;
-//
-//            default:
-//                // Not part of the RPN/NRPN workflow, ignoring.
-//                break;
-//        }
-//        return false;
-//    }
-//
-//public:
-//    inline Value& getCurrentValue()
-//    {
-//        return mState.get(mCurrentNumber.as14bits());
-//    }
-//    inline const Value& getCurrentValue() const
-//    {
-//        return mState.get(mCurrentNumber.as14bits());
-//    }
-//
-//public:
-//    State& mState;
-//    bool mSelected;
-//    Value mCurrentNumber;
-//};
-//
-//// --
-//
-//typedef State<2> RpnState;  // We'll listen to 2 RPN
-//typedef State<4> NrpnState; // and 4 NRPN
-//typedef ParameterNumberParser<RpnState,  midi::RPNMSB,  midi::RPNLSB>  RpnParser;
-//typedef ParameterNumberParser<NrpnState, midi::NRPNMSB, midi::NRPNLSB> NrpnParser;
-//
-//struct ChannelSetup
-//{
-//    inline ChannelSetup()
-//        : mRpnParser(mRpnState)
-//        , mNrpnParser(mNrpnState)
-//    {
-//    }
-//
-//    inline void reset()
-//    {
-//        mRpnParser.reset();
-//        mNrpnParser.reset();
-//    }
-//    inline void setup()
-//    {
-//        mRpnState.enable(midi::RPN::PitchBendSensitivity);
-//        mRpnState.enable(midi::RPN::ModulationDepthRange);
-//
-//        // Enable a few random NRPNs
-//        mNrpnState.enable(12);
-//        mNrpnState.enable(42);
-//        mNrpnState.enable(1234);
-//        mNrpnState.enable(1176);
-//    }
-//
-//    RpnState    mRpnState;
-//    NrpnState   mNrpnState;
-//    RpnParser   mRpnParser;
-//    NrpnParser  mNrpnParser;
-//};
-//
-//ChannelSetup sChannelSetup[16];
-//
-//// --
+template<class State, byte MsbSelectCCNumber, byte LsbSelectCCNumber>
+class ParameterNumberParser
+{
+public:
+    ParameterNumberParser(State& inState)
+        : mState(inState)
+    {
+    }
+
+public:
+    inline void reset()
+    {
+        mState.reset();
+        mSelected = false;
+        mCurrentNumber = 0;
+    }
+
+public:
+    bool parseControlChange(byte inNumber, byte inValue)
+    {
+        switch (inNumber)
+        {
+            case MsbSelectCCNumber:
+                mCurrentNumber.mMsb = inValue;
+                break;
+            case LsbSelectCCNumber:
+                if (inValue == 0x7f && mCurrentNumber.mMsb == 0x7f)
+                {
+                    // End of Null Function, disable parser.
+                    mSelected = false;
+                }
+                else
+                {
+                    mCurrentNumber.mLsb = inValue;
+                    mSelected = mState.has(mCurrentNumber.as14bits());
+                }
+                break;
+
+            case midi::DataIncrement:
+                if (mSelected)
+                {
+                    Value& currentValue = getCurrentValue();
+                    currentValue += inValue;
+                    return true;
+                }
+                break;
+            case midi::DataDecrement:
+                if (mSelected)
+                {
+                    Value& currentValue = getCurrentValue();
+                    currentValue -= inValue;
+                    return true;
+                }
+                break;
+
+            case midi::DataEntryMSB:
+                if (mSelected)
+                {
+                    Value& currentValue = getCurrentValue();
+                    currentValue.mMsb = inValue;
+                    currentValue.mLsb = 0;
+                    return true;
+                }
+                break;
+            case midi::DataEntryLSB:
+                if (mSelected)
+                {
+                    Value& currentValue = getCurrentValue();
+                    currentValue.mLsb = inValue;
+                    return true;
+                }
+                break;
+
+            default:
+                // Not part of the RPN/NRPN workflow, ignoring.
+                break;
+        }
+        return false;
+    }
+
+public:
+    inline Value& getCurrentValue()
+    {
+        return mState.get(mCurrentNumber.as14bits());
+    }
+    inline const Value& getCurrentValue() const
+    {
+        return mState.get(mCurrentNumber.as14bits());
+    }
+
+public:
+    State& mState;
+    bool mSelected;
+    Value mCurrentNumber;
+};
+
+// --
+
+typedef State<2> RpnState;  // We'll listen to 2 RPN
+typedef State<4> NrpnState; // and 4 NRPN
+typedef ParameterNumberParser<RpnState,  midi::RPNMSB,  midi::RPNLSB>  RpnParser;
+typedef ParameterNumberParser<NrpnState, midi::NRPNMSB, midi::NRPNLSB> NrpnParser;
+
+struct ChannelSetup
+{
+    inline ChannelSetup()
+        : mRpnParser(mRpnState)
+        , mNrpnParser(mNrpnState)
+    {
+    }
+
+    inline void reset()
+    {
+        mRpnParser.reset();
+        mNrpnParser.reset();
+    }
+    inline void setup()
+    {
+        mRpnState.enable(midi::RPN::PitchBendSensitivity);
+        mRpnState.enable(midi::RPN::ModulationDepthRange);
+
+        // Enable a few random NRPNs
+        mNrpnState.enable(12);
+        mNrpnState.enable(42);
+        mNrpnState.enable(1234);
+        mNrpnState.enable(1176);
+    }
+
+    RpnState    mRpnState;
+    NrpnState   mNrpnState;
+    RpnParser   mRpnParser;
+    NrpnParser  mNrpnParser;
+};
+
+ChannelSetup sChannelSetup[16];
+
+// --
 
 void HandleControlChange(byte inChannel, byte inNumber, byte inValue) {
-//  ChannelSetup& channel = sChannelSetup[inChannel];
+  ChannelSetup& channel = sChannelSetup[inChannel];
 
   if (inNumber == midi::ModulationWheel) {
     // Modulation Wheel has a range of 0 - 127 (according to MIDI spec)
     modDepth[inChannel] = ((float)inValue) / 256.0;
-        
-//  } else if (channel.mRpnParser.parseControlChange(inNumber, inValue)) {
-//    const Value& value    = channel.mRpnParser.getCurrentValue();
-//    const unsigned number = channel.mRpnParser.mCurrentNumber.as14bits();
-//
-//    if (number == midi::RPN::PitchBendSensitivity)
-//    {
-//      // Here, we use the LSB and MSB separately as they have different meaning.
-//      const byte semitones    = value.mMsb;
-//      const byte cents        = value.mLsb;
-//    }
-//    else if (number == midi::RPN::ModulationDepthRange)
-//    {
-//      // But here, we want the full 14 bit value.
-//      const unsigned range = value.as14bits();
-//    }
+  } else if (channel.mRpnParser.parseControlChange(inNumber, inValue)) {
+    const Value& value    = channel.mRpnParser.getCurrentValue();
+    const unsigned number = channel.mRpnParser.mCurrentNumber.as14bits();
+
+    if (number == midi::RPN::PitchBendSensitivity)
+    {
+      // Here, we use the LSB and MSB separately as they have different meaning.
+      bendSensitivity.semitones    = value.mMsb;
+      bendSensitivity.cents        = value.mLsb;
+    }
+    else if (number == midi::RPN::ModulationDepthRange)
+    {
+      // But here, we want the full 14 bit value.
+      const unsigned range = value.as14bits();
+    }
   }
-  
-//  // Handles the 4 message "Pitch Bend Range" RPN
-//  if (pitchBendChecklist == 0 && number ==100 && value == 0) {
-//    // maybe take off the "value == 0" this might have unforseen consequences
-//    pitchBendChecklist |= 0x01;
-//  } else if (pitchBendChecklist == 0x01 && number == 101 && value == 0) {
-//    pitchBendChecklist |= 0x02;
-//  } else if (pitchBendChecklist == 0x03 && number == 6) {
-//    pitchBendChecklist |= 0x04;
-//    // Calculate Pitch Bend Range in Semitones
-//    bendCoefficient = 16384.0 / (float)value;
-//    pitchBendChecklist = 0;
-//  } /*else if (pitchBendChecklist == 0x07 && number == 38) {
-//    pitchBendChecklist = 0;
-//    // Add on cents to Pitch Bend Range
-//    bendCoefficient += (float)(16384.0 / 100.0) * (float)value;
-//  } fix later */
-//  // handles other sequences of CC messages:
-//  else if (pitchBendChecklist >= 0x01) {
-//    pitchBendChecklist = 0;
-//  }
 }
 
 void HandlePitchBend(byte channel, int amount) {
-  //if (channel == 1) {
-  // Yamaha XG compliant
-  bend[channel] = ((float)amount) / bendCoefficient;
-  // bend = ((float)amount) / 819.2;
-  // bend = ((float)amount) / 767.0;
-  // bend = ((float)amount) / 700;
-  // bend = ((float)amount) / 660.0;
-  // Calibrated to (Voodoo - Jimmy Hendrix - XG.mid).  This should be true for all Yamaha XG.
-  // bend = ((float)amount) / 655.0;
-  //}
+//  bend[channel] = ((float)amount) / bendCoefficient;
+  bend[channel] = ((float)((int16_t)(amount - 8192)) / 8192.0) * ((float)bendSensitivity.semitones + (0.01 * bendSensitivity.cents));
 }
 
 inline float calcModulation(byte channel) {
@@ -372,21 +362,10 @@ void playLowest() {
   s = chord.getSize();
   c = chord.getLowestNoteChannel();
   if (s > 0 && chord.getLowestNote() >= 0) {
-#ifdef NewTone_h
-    NewTone(
-#else
-    tone(
-#endif
-      SPEAKER,
-      440.0 * pow(2.0, ((chord.getLowestNote() - 69.0) + bend[c] + calcModulation(c)) / 12.0)
-    );
+    playNote(chord.getLowestNote(),c);
     timer = millis();
   } else if (s == 0) {
-#ifdef NewTone_h
-    noNewTone(SPEAKER);
-#else
-    noTone(SPEAKER);
-#endif
+    stopNote();
   }
   change = false;
 }
@@ -397,21 +376,10 @@ void playHighest() {
   c = chord.getHighestNoteChannel();
 
   if (s > 0 && chord.getHighestNote() >= 0) {
-#ifdef NewTone_h
-    NewTone(
-#else
-    tone(
-#endif
-      SPEAKER,
-      440.0 * pow(2.0, ((chord.getHighestNote() - 69.0) + bend[c] + calcModulation(c)) / 12.0)
-    );
+    playNote(chord.getHighestNote(), c);
     timer = millis();
   } else if (s == 0) {
-#ifdef NewTone_h
-    noNewTone(SPEAKER);
-#else
-    noTone(SPEAKER);
-#endif
+    stopNote();
   }
   change = false;
 }  
@@ -440,29 +408,15 @@ void arpAscend() {
     }
   
     if (playing && change) {
-#ifdef NewTone_h
-    NewTone(
-#else
-      tone(
-#endif
-        SPEAKER,
-        440.0 * pow(2.0, (chord.getNote(i) - 69.0 + bend[c] + mod) /12.0)
-      );
+      playNote(chord.getNote(i), c);
     }
   } else {
-#ifdef NewTone_h
-    noNewTone(SPEAKER);
-#else
-    noTone(SPEAKER);
-#endif
+    stopNote();
   }
 
   if (playing && s != 1 && ((long)(millis() - timer) >= 0)) {
-#ifdef NewTone_h
-    noNewTone(SPEAKER);
-#else
-    noTone(SPEAKER);
-#endif
+    stopNote();
+    
     // Set timeout for gap between notes
     timer = millis + noteGap;
 
@@ -501,23 +455,13 @@ void arpDescend() {
     }
   
     if (playing && change) {
-#ifdef NewTone_h
-      NewTone(
-#else
-      tone(
-#endif
-        SPEAKER,
-        440.0 * pow(2.0, (chord.getNote(i, true) - 69.0 + bend[c] + mod) /12.0)
-      );
+      playNote(chord.getNote(i, true), c);
     }
   }
 
   if (playing && s != 1 && ((long)(millis() - timer) >= 0)) {
-#ifdef NewTone_h
-    noNewTone(SPEAKER);
-#else
-    noTone(SPEAKER);
-#endif
+    stopNote();
+    
     // Set timeout for gap between notes
     timer = millis + noteGap;
 
@@ -535,21 +479,10 @@ void arpDescend() {
 // Most recent note priority (monophonic)
 void playCurrent() {
   if (current.note < 255 && current.channel < 255) {
-#ifdef NewTone_h
-    NewTone(
-#else
-    tone(
-#endif
-        SPEAKER,
-        440.0 * pow(2.0, (current.note - 69.0 + bend[current.channel] + calcModulation(current.channel)) / 12.0)
-      );
+    playNote(current.note, current.channel);
     timer = millis();
   } else {
-#ifdef NewTone_h
-    noNewTone(SPEAKER);
-#else
-    noTone(SPEAKER);
-#endif
+    stopNote();
   }
   change = false;
 }
@@ -559,6 +492,9 @@ void setup() {
   timer = 0;
   s = 0;
   playing = false;
+
+  bendSensitivity.semitones = 1;
+  bendSensitivity.cents = 0;
   // Set pin high for Trellis Interrupt pin
   pinMode(A2, INPUT);
   digitalWrite(A2, HIGH);
@@ -626,10 +562,6 @@ void loop() {
   } else if (digitalRead(AMODE_HIGHEST) == LOW) {
     playHighest();
   } else {
-#ifdef NewTone_h
-    noNewTone(SPEAKER);
-#else
-    noTone(SPEAKER);
-#endif
+    stopNote();
   }
 }
