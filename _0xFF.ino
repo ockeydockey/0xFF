@@ -12,10 +12,16 @@
 * [ ] Per-channel pitch bending
 * [o] Adjustable pitch bend according to GM spec
 * [ ] Modulation LFO
+* 
+* Requires:
+* [ ] Arduino MIDI Library 4.3.1 (by FortySevenEffects)
+* [ ] Adafruit Trellis Library (Tested with Versions 1.0.0 and 1.0.1)
+* [ ] Either: Arduino Tone Library OR NewTone Library (by Tim Eckel)
 ***************************************************/
 
 // For MIDI
 #include <MIDI.h>
+#include "RPN_Parser.cpp"
 #include "Chord.h"
 #include "utility.h"
 
@@ -55,6 +61,7 @@
 // High Priority
 #define AMODE_HIGHEST 13
 
+// Initialize MIDI Library instance
 MIDI_CREATE_DEFAULT_INSTANCE();
 
 typedef struct note_t {
@@ -84,6 +91,7 @@ Note current;
 boolean playing;
 float mod = 0;
 float prevMod = 0;
+ChannelSetup sChannelSetup[16];
 
 boolean chanEnable[] = {
   false, // There are 17 indexes to make 1-16 available for each MIDI channel.  This saves on math.
@@ -123,7 +131,6 @@ Adafruit_Trellis matrix0 = Adafruit_Trellis();
 Adafruit_TrellisSet trellis = Adafruit_TrellisSet(&matrix0);
 
 void HandlePitchBend(byte channel, int amount) {
-//  bend[channel] = ((float)amount) / bendCoefficient;
   bend[channel] = ((float)((int16_t)(amount - 8192)) / 8192.0) * ((float)bendSensitivity.semitones + (0.01 * bendSensitivity.cents));
 }
 
@@ -193,144 +200,6 @@ void HandleNoteOff(byte channel, byte pitch, byte velocity) {
 
   change = true;
 }
-
-template<class State, byte MsbSelectCCNumber, byte LsbSelectCCNumber>
-class ParameterNumberParser
-{
-public:
-    ParameterNumberParser(State& inState)
-        : mState(inState)
-    {
-    }
-
-public:
-    inline void reset()
-    {
-        mState.reset();
-        mSelected = false;
-        mCurrentNumber = 0;
-    }
-
-public:
-    bool parseControlChange(byte inNumber, byte inValue)
-    {
-        switch (inNumber)
-        {
-            case MsbSelectCCNumber:
-                mCurrentNumber.mMsb = inValue;
-                break;
-            case LsbSelectCCNumber:
-                if (inValue == 0x7f && mCurrentNumber.mMsb == 0x7f)
-                {
-                    // End of Null Function, disable parser.
-                    mSelected = false;
-                }
-                else
-                {
-                    mCurrentNumber.mLsb = inValue;
-                    mSelected = mState.has(mCurrentNumber.as14bits());
-                }
-                break;
-
-            case midi::DataIncrement:
-                if (mSelected)
-                {
-                    Value& currentValue = getCurrentValue();
-                    currentValue += inValue;
-                    return true;
-                }
-                break;
-            case midi::DataDecrement:
-                if (mSelected)
-                {
-                    Value& currentValue = getCurrentValue();
-                    currentValue -= inValue;
-                    return true;
-                }
-                break;
-
-            case midi::DataEntryMSB:
-                if (mSelected)
-                {
-                    Value& currentValue = getCurrentValue();
-                    currentValue.mMsb = inValue;
-                    currentValue.mLsb = 0;
-                    return true;
-                }
-                break;
-            case midi::DataEntryLSB:
-                if (mSelected)
-                {
-                    Value& currentValue = getCurrentValue();
-                    currentValue.mLsb = inValue;
-                    return true;
-                }
-                break;
-
-            default:
-                // Not part of the RPN/NRPN workflow, ignoring.
-                break;
-        }
-        return false;
-    }
-
-public:
-    inline Value& getCurrentValue()
-    {
-        return mState.get(mCurrentNumber.as14bits());
-    }
-    inline const Value& getCurrentValue() const
-    {
-        return mState.get(mCurrentNumber.as14bits());
-    }
-
-public:
-    State& mState;
-    bool mSelected;
-    Value mCurrentNumber;
-};
-
-// --
-
-typedef State<2> RpnState;  // We'll listen to 2 RPN
-typedef State<4> NrpnState; // and 4 NRPN
-typedef ParameterNumberParser<RpnState,  midi::RPNMSB,  midi::RPNLSB>  RpnParser;
-typedef ParameterNumberParser<NrpnState, midi::NRPNMSB, midi::NRPNLSB> NrpnParser;
-
-struct ChannelSetup
-{
-    inline ChannelSetup()
-        : mRpnParser(mRpnState)
-        , mNrpnParser(mNrpnState)
-    {
-    }
-
-    inline void reset()
-    {
-        mRpnParser.reset();
-        mNrpnParser.reset();
-    }
-    inline void setup()
-    {
-        mRpnState.enable(midi::RPN::PitchBendSensitivity);
-        mRpnState.enable(midi::RPN::ModulationDepthRange);
-
-        // Enable a few random NRPNs
-        mNrpnState.enable(12);
-        mNrpnState.enable(42);
-        mNrpnState.enable(1234);
-        mNrpnState.enable(1176);
-    }
-
-    RpnState    mRpnState;
-    NrpnState   mNrpnState;
-    RpnParser   mRpnParser;
-    NrpnParser  mNrpnParser;
-};
-
-ChannelSetup sChannelSetup[16];
-
-// --
 
 void HandleControlChange(byte inChannel, byte inNumber, byte inValue) {
   ChannelSetup& channel = sChannelSetup[inChannel];
