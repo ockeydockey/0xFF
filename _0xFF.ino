@@ -123,6 +123,17 @@ float modDepth[] = {
 Adafruit_Trellis matrix0 = Adafruit_Trellis();
 Adafruit_TrellisSet trellis = Adafruit_TrellisSet(&matrix0);
 
+void HandlePitchBend(byte channel, int amount) {
+//  bend[channel] = ((float)amount) / bendCoefficient;
+  bend[channel] = ((float)((int16_t)(amount - 8192)) / 8192.0) * ((float)bendSensitivity.semitones + (0.01 * bendSensitivity.cents));
+}
+
+inline float calcModulation(byte channel) {
+  // Implements a single instruction byte mask to replace a more costly modulus of 256
+  // Using 1 step per millisecond on a 256 step sine wave gives a period of 256/1000 of a second (or about 1/4 second)
+  return pgm_read_float(&lfo_sine256[ (millis() & 0xFF) ]) * modDepth[ channel ];
+}
+
 inline void playNote(int note, byte channel) { // inline used to reduce instruction/stack overhead for function
 #ifdef NewTone_h
   NewTone(
@@ -346,17 +357,6 @@ void HandleControlChange(byte inChannel, byte inNumber, byte inValue) {
   }
 }
 
-void HandlePitchBend(byte channel, int amount) {
-//  bend[channel] = ((float)amount) / bendCoefficient;
-  bend[channel] = ((float)((int16_t)(amount - 8192)) / 8192.0) * ((float)bendSensitivity.semitones + (0.01 * bendSensitivity.cents));
-}
-
-inline float calcModulation(byte channel) {
-  // Implements a single instruction byte mask to replace a more costly modulus of 256
-  // Using 1 step per millisecond on a 256 step sine wave gives a period of 256/1000 of a second (or about 1/4 second)
-  return pgm_read_float(&lfo_sine256[ (millis() & 0xFF) ]) * modDepth[ channel ];
-}
-
 // Lowest note priority (monophonic)
 void playLowest() {
   s = chord.getSize();
@@ -551,6 +551,7 @@ void loop() {
     noteGap = 0;
   }
 
+  // Read mode selector pins
   if (digitalRead(AMODE_LOWEST) == LOW) {
     playLowest();
   } else if (digitalRead(AMODE_ASCEND) == LOW) {
