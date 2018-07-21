@@ -6,32 +6,35 @@ Chord::Chord(void) {
     this->tail = new ListNode(-2, this->head, NULL);
 
     this->head->next = this->tail;
+
+    this->size = 0;
 }
 
 Chord::~Chord(void) {
+    this->clear();
 }
 
-int Chord::getSize() {
-    int count = 0;
-    ListNode* current;
-    current = this->head->next;
-
-    while (current != this->tail) {
-        current = current->next;
-        count++;
-    }
-    
-    return count;
+unsigned int Chord::getSize() {
+    return this->size;
 }
 
-int Chord::getNote(int index) {
+int Chord::getNote(int index, bool fromEnd) {
     ListNode* current;
-    current = this->head->next;
-    
-    for (int i = 0; i < index; i++) {
-        current = current->next;
-    }
-    
+
+    if (fromEnd) {
+        current = this->tail->prev;
+
+        for (; index > 0; index--) {
+            current = current->prev;
+        }
+
+    } else {
+        current = this->head->next;
+        
+        for (; index > 0; index--) {
+            current = current->next;
+        }
+    }    
     return current->data;
 }
 
@@ -51,37 +54,49 @@ byte Chord::getLowestNoteChannel() {
     return this->tail->prev->channel;
 }
 
-byte Chord::getChannel(int index) {
+byte Chord::getChannel(int index, bool fromEnd) {
     ListNode* current;
-    current = this->head->next;
+    
+    if (fromEnd) {
+        current = this->tail->prev;
 
-    for (int i = 0; i < index; i++) {
-        current = current->next;
+        for (; index > 0; index--) {
+            current = current->prev;
+        }
+
+    } else {
+        current = this->head->next;
+
+        for (; index > 0; index--) {
+            current = current->next;
+        }
     }
 
     return current->channel;
 }
 
-void Chord::addNote(int tone) {
-    ListNode* current;
-    current = this->head->next;
+// void Chord::addNote(int tone) {
+//     ListNode* current;
+//     current = this->head->next;
 
-    bool isFound = false;
+//     bool isFound = false;
 
-    while((current != this->tail) && !isFound) {
-        if (current->data < tone) {
-            current = current->next;
-        }
-        else {
-            isFound = true;
-        }
-    }
+//     while((current != tail) && !isFound) {
+//         if (current->data < tone) {
+//             current = current->next;
+//         }
+//         else {
+//             isFound = true;
+//         }
+//     }
 
-    ListNode* futurePrev = current->prev;
-    ListNode* futureNext = current;
-    futurePrev->next = new ListNode(tone, futurePrev, futureNext);
-    futureNext->prev = futurePrev->next;
-}
+//     ListNode* futurePrev = current->prev;
+//     ListNode* futureNext = current;
+//     futurePrev->next = new ListNode(tone, futurePrev, futureNext);
+//     futureNext->prev = futurePrev->next;
+
+//     size++;
+// }
 
 void Chord::addNote(int tone, byte channel) {
     ListNode* current;
@@ -89,7 +104,7 @@ void Chord::addNote(int tone, byte channel) {
 
     bool isFound = false;
 
-    while((current != this->tail) && !isFound) {
+    while((current != tail) && !isFound) {
         if (current->data < tone) {
             current = current->next;
         }
@@ -102,20 +117,48 @@ void Chord::addNote(int tone, byte channel) {
     ListNode* futureNext = current;
     futurePrev->next = new ListNode(tone, futurePrev, futureNext, channel);
     futureNext->prev = futurePrev->next;
+
+    size++;
 }
 
-uint8_t Chord::removeNote(int tone) {
+// bool Chord::removeNote(int tone) {
+//     ListNode* current = this->head->next;
+//     bool isFound = false;
+
+//     while(!isFound && (current != tail)) {
+//         if (current->data == tone) {
+//             isFound = true;
+//         }
+//         else {
+//             current = current->next;
+//         }
+//     }
+
+//     if (isFound) {
+//         ListNode* futurePrev = current->prev;
+//         ListNode* futureNext = current->next;
+//         futurePrev->next = futureNext;
+//         futureNext->prev = futurePrev;
+
+//         delete current;
+//         current = NULL;
+
+//         size--;
+//     }
+
+//     return isFound;
+// }
+
+bool Chord::removeNote(int tone, byte channel) {
     ListNode* current = this->head->next;
     bool isFound = false;
-    uint8_t count = 0;
 
-    while((current != this->tail) && !isFound) {
-        if (current->data != tone) {
-            current = current->next;
-            count++;
-        }
-        else {
+    // while((current != this->tail) && !isFound) {
+    while(!isFound && (current != tail)) {
+        if (current->data == tone && current->channel == channel) {
             isFound = true;
+        } else {
+            current = current->next;
         }
     }
 
@@ -127,43 +170,17 @@ uint8_t Chord::removeNote(int tone) {
 
         delete current;
         current = NULL;
-        return count;
-    }
-    return 255;
-}
 
-uint8_t Chord::removeNote(int tone, byte channel) {
-    ListNode* current = this->head->next;
-    bool isFound = false;
-    uint8_t count = 0;
-
-    while((current != this->tail) && !isFound) {
-        if (current->data != tone && current->channel != channel) {
-            current = current->next;
-            count++;
-        }
-        else {
-            isFound = true;
-        }
+        size--;
     }
 
-    if (isFound) {
-        ListNode* futurePrev = current->prev;
-        ListNode* futureNext = current->next;
-        futurePrev->next = futureNext;
-        futureNext->prev = futurePrev;
-
-        delete current;
-        current = NULL;
-        return count;
-    }
-    return 255;
+    return isFound;
 }
 
 void Chord::removeChannel(byte channel) {
     ListNode* current = this->head->next;
 
-    while((current != this->tail)) {
+    while((current != tail)) {
         if (current->channel == channel) {
             ListNode* futurePrev = current->prev;
             ListNode* futureNext = current->next;
@@ -172,6 +189,8 @@ void Chord::removeChannel(byte channel) {
 
             delete current;
             current = futureNext;
+
+            size--;
         }
         else {
             current = current->next;
@@ -182,7 +201,7 @@ void Chord::removeChannel(byte channel) {
 void Chord::clear() {
     ListNode* current = this->head->next;
     ListNode* next;
-    while (current != this->tail) {
+    while (current != tail) {
         next = current->next;
         delete current;
         current = next;
@@ -190,4 +209,5 @@ void Chord::clear() {
 
     this->head->next = tail;
     this->tail->prev = head;
+    this->size = 0;
 }
