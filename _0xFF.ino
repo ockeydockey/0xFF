@@ -16,8 +16,7 @@
 
 // For MIDI
 #include <MIDI.h>
-#include <Chord.h>
-#include <ListNode.h>
+#include "Chord.h"
 #include "utility.h"
 
 // For Trellis
