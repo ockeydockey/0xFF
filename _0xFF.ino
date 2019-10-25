@@ -33,7 +33,7 @@
 #include "LFOWaveforms.h"
 
 // For Tone
-#include <NewTone.h>
+//#include <NewTone.h>
 
 /*******************************
 * Hardware pin assignments
@@ -76,8 +76,8 @@ typedef struct sensitivity_t {
 
 Chord chord;
 // Settings
-unsigned int noteGap;
-unsigned int noteLength;
+uint32_t noteGap;
+uint32_t noteLength;
 Sensitivity bendSensitivity;
 
 // Current conditions
@@ -131,7 +131,9 @@ Adafruit_Trellis matrix0 = Adafruit_Trellis();
 Adafruit_TrellisSet trellis = Adafruit_TrellisSet(&matrix0);
 
 void HandlePitchBend(byte channel, int amount) {
-  bend[channel] = ((float)((int16_t)(amount - 8192)) / 8192.0) * ((float)bendSensitivity.semitones + (0.01 * bendSensitivity.cents));
+  // The amount returned from the MIDI library is a zero-centered 14-bit int (zero == no bend)
+  // bend[channel] = ((float)((int16_t)(amount - 8192)) / 8192.0) * ((float)bendSensitivity.semitones + (0.01 * bendSensitivity.cents));
+  bend[channel] = ((float)((float)(amount)) / 8192.0f) * ((float)bendSensitivity.semitones + (0.01 * bendSensitivity.cents));
 }
 
 inline float calcModulation(byte channel) {
@@ -220,7 +222,7 @@ void HandleControlChange(byte inChannel, byte inNumber, byte inValue) {
     else if (number == midi::RPN::ModulationDepthRange)
     {
       // But here, we want the full 14 bit value.
-      const unsigned range = value.as14bits();
+      const unsigned int range = value.as14bits();
     }
   }
 }
@@ -230,7 +232,7 @@ void playLowest() {
   s = chord.getSize();
   c = chord.getLowestNoteChannel();
   if (s > 0 && chord.getLowestNote() >= 0) {
-    playNote(chord.getLowestNote(),c);
+    playNote(chord.getLowestNote(), c);
     timer = millis();
   } else if (s == 0) {
     stopNote();
@@ -310,7 +312,7 @@ void arpDescend() {
 
   // If the chord size is greater than 0
   if (s > 0) {
-    // If not palying a note, and the note gap timer is up
+    // If not playing a note, and the note gap timer is up
     if (!playing && ((long)(millis() - timer) >= 0)) {
       // Set timeout for current note duration
       timer = millis() + noteLength;
@@ -410,12 +412,12 @@ void loop() {
   }
   MIDI.read();
   if (digitalRead(STACCATO)) {
-    noteLength = map(analogRead(ARP_SPEED),0, 1024, 10, 500);
+    noteLength = map(analogRead(ARP_SPEED), 0, 1024, 10, 500);
     // Carve out the gap from the total note length.  (Preserves musical timing)
-    noteGap = map(analogRead(GAP),0, 1024, 1, (noteLength * 10) / 9);
+    noteGap = map(analogRead(GAP), 0, 1024, 1, (noteLength * 10) / 9);
     noteLength = noteLength - noteGap;
   } else {
-    noteLength = map(analogRead(ARP_SPEED),0, 1024, 10, 500);
+    noteLength = map(analogRead(ARP_SPEED), 0, 1024, 10, 500);
     noteGap = 0;
   }
 
