@@ -82,12 +82,12 @@ Sensitivity bendSensitivity;
 
 // Current conditions
 unsigned long timer;
-unsigned long int wait = millis() + 30;
+unsigned long int trellisUpdateTimeout = millis() + 30;
 uint8_t i;
 volatile unsigned int s;
 volatile byte c;
 volatile bool change = false;
-Note current;
+Note current = { .note = 0xFF, .channel = 0xFF };
 boolean playing;
 float mod = 0;
 float prevMod = 0;
@@ -218,9 +218,7 @@ void HandleControlChange(byte inChannel, byte inNumber, byte inValue) {
       // Here, we use the LSB and MSB separately as they have different meaning.
       bendSensitivity.semitones    = value.mMsb;
       bendSensitivity.cents        = value.mLsb;
-    }
-    else if (number == midi::RPN::ModulationDepthRange)
-    {
+    } else if (number == midi::RPN::ModulationDepthRange) {
       // But here, we want the full 14 bit value.
       const unsigned int range = value.as14bits();
     }
@@ -288,7 +286,7 @@ void arpAscend() {
     stopNote();
     
     // Set timeout for gap between notes
-    timer = millis + noteGap;
+    timer = millis() + noteGap;
 
     // Prepare to play next note
     playing = false;
@@ -333,7 +331,7 @@ void arpDescend() {
     stopNote();
     
     // Set timeout for gap between notes
-    timer = millis + noteGap;
+    timer = millis() + noteGap;
 
     // Prepare to play next note
     playing = false;
@@ -365,6 +363,11 @@ void setup() {
 
   bendSensitivity.semitones = 1;
   bendSensitivity.cents = 0;
+
+  // Enable output of MIDI optoisolator
+  pinMode(3, OUTPUT);
+  digitalWrite(3, HIGH);
+
   // Set pin high for Trellis Interrupt pin
   pinMode(A2, INPUT);
   digitalWrite(A2, HIGH);
@@ -404,8 +407,8 @@ void setup() {
 }
 
 void loop() {
-  if (millis() >= wait) {
-    wait = millis() + 30;
+  if (millis() >= trellisUpdateTimeout) {
+    trellisUpdateTimeout = millis() + 30;
     if (trellis.readSwitches()) {
       updateChannels();
     }
@@ -426,7 +429,7 @@ void loop() {
     playLowest();
   } else if (digitalRead(AMODE_ASCEND) == LOW) {
     arpAscend();
-  } else if (digitalRead(AMODE_OFF) ==LOW) {
+  } else if (digitalRead(AMODE_OFF) == LOW) {
     playCurrent();
   } else if (digitalRead(AMODE_DESCEND) == LOW) {
     arpDescend();
