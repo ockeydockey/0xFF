@@ -45,7 +45,7 @@
 // Arpeggiation speed dial
 #define ARP_SPEED A0
 // Staccato gap length dial
-#define GAP A1
+#define STACC_GAP A1
 
 /*******************************
 * Arpeggiation modes
@@ -130,6 +130,7 @@ float modDepth[] = {
 Adafruit_Trellis matrix0 = Adafruit_Trellis();
 Adafruit_TrellisSet trellis = Adafruit_TrellisSet(&matrix0);
 
+// Callback for MIDI PitchBend Control Change message
 void HandlePitchBend(byte channel, int amount) {
   // The amount returned from the MIDI library is a zero-centered 14-bit int (zero == no bend)
   // bend[channel] = ((float)((int16_t)(amount - 8192)) / 8192.0) * ((float)bendSensitivity.semitones + (0.01 * bendSensitivity.cents));
@@ -161,6 +162,7 @@ inline void stopNote() { // inline used to reduce instruction/stack overhead for
 #endif
 }
 
+// Update the chanEnable statuses with the current Adafruit Trellis button states
 void updateChannels() {
   for (uint8_t i = 0; i < 16; i++) {
     if (trellis.justPressed(i)) {
@@ -176,6 +178,7 @@ void updateChannels() {
   trellis.writeDisplay();
 }
 
+// Callback for MIDI NoteON message
 void HandleNoteOn(byte channel, byte pitch, byte velocity) {
   if (chanEnable[channel]) {
     if (velocity != 0) {
@@ -188,6 +191,7 @@ void HandleNoteOn(byte channel, byte pitch, byte velocity) {
   }
 }
 
+// Callback for MIDI NoteOFF message
 void HandleNoteOff(byte channel, byte pitch, byte velocity) {
   chord.removeNote(pitch, channel); // returns bool if debugging is needed
 
@@ -211,16 +215,18 @@ void HandleControlChange(byte inChannel, byte inNumber, byte inValue) {
     modDepth[inChannel] = ((float)inValue) / 256.0;
   } else if (channel.mRpnParser.parseControlChange(inNumber, inValue)) {
     const Value& value    = channel.mRpnParser.getCurrentValue();
-    const unsigned number = channel.mRpnParser.mCurrentNumber.as14bits();
-
-    if (number == midi::RPN::PitchBendSensitivity)
-    {
+    
+    switch(channel.mRpnParser.mCurrentNumber.as14bits()) {
+    case midi::RPN::PitchBendSensitivity:
       // Here, we use the LSB and MSB separately as they have different meaning.
       bendSensitivity.semitones    = value.mMsb;
       bendSensitivity.cents        = value.mLsb;
-    } else if (number == midi::RPN::ModulationDepthRange) {
+      break;
+    
+    case midi::RPN::ModulationDepthRange:
       // But here, we want the full 14 bit value.
-      const unsigned int range = value.as14bits();
+      const unsigned range = value.as14bits();
+      break;
     }
   }
 }
@@ -371,16 +377,19 @@ void setup() {
   // Set pin high for Trellis Interrupt pin
   pinMode(A2, INPUT);
   digitalWrite(A2, HIGH);
+
   // Set the input for the arpeggiation speed and note Gap
   pinMode(ARP_SPEED, INPUT);
-  pinMode(GAP, INPUT);
+  pinMode(STACC_GAP, INPUT);
   pinMode(STACCATO, INPUT_PULLUP);
+
   // Set the pinmode to PULLUP for the 5 way selector
   pinMode(AMODE_LOWEST, INPUT_PULLUP);
   pinMode(AMODE_ASCEND, INPUT_PULLUP);
   pinMode(AMODE_OFF, INPUT_PULLUP);
   pinMode(AMODE_DESCEND, INPUT_PULLUP);
   pinMode(AMODE_HIGHEST, INPUT_PULLUP);
+  
   // Set MIDI handlers
   MIDI.setHandleNoteOn(HandleNoteOn);
   MIDI.setHandleNoteOff(HandleNoteOff);
@@ -417,7 +426,7 @@ void loop() {
   if (digitalRead(STACCATO)) {
     noteLength = map(analogRead(ARP_SPEED), 0, 1024, 10, 500);
     // Carve out the gap from the total note length.  (Preserves musical timing)
-    noteGap = map(analogRead(GAP), 0, 1024, 1, (noteLength * 10) / 9);
+    noteGap = map(analogRead(STACC_GAP), 0, 1024, 1, (noteLength * 10) / 9);
     noteLength = noteLength - noteGap;
   } else {
     noteLength = map(analogRead(ARP_SPEED), 0, 1024, 10, 500);
