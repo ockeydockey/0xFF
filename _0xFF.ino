@@ -477,6 +477,7 @@ void loop() {
     noteGap = map(analogRead(AUX_DIAL), 0, 1024, 1, (noteLength * 10) / 9);
     noteLength = noteLength - noteGap;
   } else {
+    Portamento_stopGlide();
     noteLength = map(analogRead(ARP_SPEED), 0, 1024, 10, 500);
     noteGap = 0;
   }
