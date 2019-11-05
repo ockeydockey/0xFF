@@ -91,6 +91,9 @@ volatile unsigned int s;
 volatile byte c;
 volatile bool change = false;
 Note current = { .note = 0xFF, .channel = 0xFF };
+Note previousLowestNote = { .note = 0xFF, .channel = 0xFF };
+Note previousHighestNote = { .note = 0xFF, .channel = 0xFF };
+Note previousNote = { .note = 0xFF, .channel = 0xFF };
 boolean playing;
 float mod = 0;
 float prevMod = 0;
@@ -146,14 +149,14 @@ inline float calcModulation(byte channel) {
   return pgm_read_float(&lfo_sine256[ (millis() & 0xFF) ]) * modDepth[ channel ];
 }
 
-inline void playNote(int note, byte channel) { // inline used to reduce instruction/stack overhead for function
+inline void playNote(int note, byte channel, bool portamento) { // inline used to reduce instruction/stack overhead for function
 #ifdef NewTone_h
   NewTone(
 #else
   tone(
 #endif
     SPEAKER,
-    440.0 * pow(2.0, ((note - 69.0) + bend[channel] + calcModulation(channel) + Portamento_getCurrentOffset()) / 12.0)
+    440.0 * pow(2.0, ((note - 69.0) + bend[channel] + calcModulation(channel) + ((portamento) ? Portamento_getCurrentOffset() : 0.0)) / 12.0)
   );
 }
 
@@ -186,9 +189,9 @@ void HandleNoteOn(byte channel, byte pitch, byte velocity) {
   if (chanEnable[channel]) {
     if (velocity != 0) {
       chord.addNote(pitch, channel);
-      if (digitalRead(AUX_ENABLE)) {
-        Portamento_startGlide(current.note, (uint8_t)pitch, analogRead(AUX_DIAL));
-      }
+
+      previousNote.note = current.note;
+      previousNote.channel = current.channel;
       current.note = pitch;
       current.channel = channel;
     } else {
@@ -202,12 +205,19 @@ void HandleNoteOff(byte channel, byte pitch, byte velocity) {
   chord.removeNote(pitch, channel); // returns bool if debugging is needed
 
   if (current.note == pitch && current.channel == channel) {
+    previousNote.note = current.note;
+    previousNote.channel = current.channel;
     current.note = 255;
     current.channel = 255;
+    
     Portamento_stopGlide();
   }
   
   if (chord.getSize() == 0) {
+    previousNote.note = 0xFF;
+    previousNote.channel = 0xFF;
+    current.note = 255;
+    current.channel = 255;
     stopNote();
   }
 
@@ -242,12 +252,22 @@ void HandleControlChange(byte inChannel, byte inNumber, byte inValue) {
 void playLowest() {
   s = chord.getSize();
   c = chord.getLowestNoteChannel();
-  if (s > 0 && chord.getLowestNote() >= 0) {
-    playNote(chord.getLowestNote(), c);
+  byte lowestNote = chord.getLowestNote();
+  if (s > 0 && lowestNote >= 0) {
+    if (lowestNote != previousLowestNote.note) {
+      Portamento_stopGlide();
+      Portamento_startGlide(previousLowestNote.note, lowestNote, analogRead(AUX_DIAL));
+      previousLowestNote.note = lowestNote;
+      previousLowestNote.channel = c;
+    }
+    playNote(lowestNote, c, digitalRead(AUX_ENABLE));
     timer = millis();
   } else if (s == 0) {
     stopNote();
+    previousLowestNote.note = 0xFF;
+    previousLowestNote.channel = 0xFF;
   }
+
   change = false;
 }
 
@@ -255,16 +275,26 @@ void playLowest() {
 void playHighest() {
   s = chord.getSize();
   c = chord.getHighestNoteChannel();
-
-  if (s > 0 && chord.getHighestNote() >= 0) {
-    playNote(chord.getHighestNote(), c);
+  byte highestNote = chord.getHighestNote();
+  if (s > 0 && highestNote >= 0) {
+    if (highestNote != previousHighestNote.note) {
+      Portamento_stopGlide();
+      Portamento_startGlide(previousHighestNote.note, highestNote, analogRead(AUX_DIAL));
+      previousHighestNote.note = highestNote;
+      previousHighestNote.channel = c;
+    }
+    playNote(highestNote, c, digitalRead(AUX_ENABLE));
     timer = millis();
   } else if (s == 0) {
     stopNote();
+    previousHighestNote.note = 0xFF;
+    previousHighestNote.channel = 0xFF;
   }
+
   change = false;
 }  
 
+// Ascending arpeggiation (simulated polyphonic)
 void arpAscend() {
   Portamento_stopGlide();
   s = chord.getSize();
@@ -290,7 +320,7 @@ void arpAscend() {
     }
   
     if (playing && change) {
-      playNote(chord.getNote(i), c);
+      playNote(chord.getNote(i), c, false);
     }
   } else {
     stopNote();
@@ -310,9 +340,11 @@ void arpAscend() {
   // Update previous values
   prevbend[c] = bend[c];
   prevMod = mod;
+
   change = false;
 }
 
+// Descending arpeggiation (simulated polyphonic)
 void arpDescend() {
   Portamento_stopGlide();
   s = chord.getSize();
@@ -338,7 +370,7 @@ void arpDescend() {
     }
   
     if (playing && change) {
-      playNote(chord.getNote(i, true), c);
+      playNote(chord.getNote(i, true), c, false);
     }
   }
 
@@ -356,17 +388,24 @@ void arpDescend() {
   // Update previous values
   prevbend[c] = bend[c];
   prevMod = mod;
+
   change = false;
 }
 
 // Most recent note priority (monophonic)
 void playCurrent() {
   if (current.note < 255 && current.channel < 255) {
-    playNote(current.note, current.channel);
+    if (current.note != previousNote.note) {
+      Portamento_startGlide(previousNote.note, current.note, analogRead(AUX_DIAL));
+      previousNote.note = current.note;
+      previousNote.channel = current.channel;
+    }
+    playNote(current.note, current.channel, digitalRead(AUX_ENABLE));
     timer = millis();
   } else {
     stopNote();
   }
+
   change = false;
 }
 
