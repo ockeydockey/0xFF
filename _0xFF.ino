@@ -23,6 +23,7 @@
 #include <MIDI.h>
 #include "RPN_Parser.cpp"
 #include "Chord.h"
+#include "Portamento.h"
 #include "utility.h"
 
 // For Trellis
@@ -41,11 +42,11 @@
 // Speaker output pin
 #define SPEAKER 4
 // Staccato enable switch
-#define STACCATO 8
+#define AUX_ENABLE 8
 // Arpeggiation speed dial
 #define ARP_SPEED A0
 // Staccato gap length dial
-#define STACC_GAP A1
+#define AUX_DIAL A1
 
 /*******************************
 * Arpeggiation modes
@@ -74,7 +75,9 @@ typedef struct sensitivity_t {
   byte cents;
 } Sensitivity;
 
+// Note storage
 Chord chord;
+
 // Settings
 uint32_t noteGap;
 uint32_t noteLength;
@@ -150,7 +153,7 @@ inline void playNote(int note, byte channel) { // inline used to reduce instruct
   tone(
 #endif
     SPEAKER,
-    440.0 * pow(2.0, ((note - 69.0) + bend[channel] + calcModulation(channel)) / 12.0)
+    440.0 * pow(2.0, ((note - 69.0) + bend[channel] + calcModulation(channel) + Portamento_getCurrentOffset()) / 12.0)
   );
 }
 
@@ -183,6 +186,9 @@ void HandleNoteOn(byte channel, byte pitch, byte velocity) {
   if (chanEnable[channel]) {
     if (velocity != 0) {
       chord.addNote(pitch, channel);
+      if (digitalRead(AUX_ENABLE)) {
+        Portamento_startGlide(current.note, (uint8_t)pitch, analogRead(AUX_DIAL));
+      }
       current.note = pitch;
       current.channel = channel;
     } else {
@@ -198,6 +204,7 @@ void HandleNoteOff(byte channel, byte pitch, byte velocity) {
   if (current.note == pitch && current.channel == channel) {
     current.note = 255;
     current.channel = 255;
+    Portamento_stopGlide();
   }
   
   if (chord.getSize() == 0) {
@@ -259,6 +266,7 @@ void playHighest() {
 }  
 
 void arpAscend() {
+  Portamento_stopGlide();
   s = chord.getSize();
   // If the current note index is bigger than the chord size
   if (i >= s) {
@@ -306,6 +314,7 @@ void arpAscend() {
 }
 
 void arpDescend() {
+  Portamento_stopGlide();
   s = chord.getSize();
   // If the current note index is bigger than the chord size
   if (i >= s) {
@@ -380,8 +389,8 @@ void setup() {
 
   // Set the input for the arpeggiation speed and note Gap
   pinMode(ARP_SPEED, INPUT);
-  pinMode(STACC_GAP, INPUT);
-  pinMode(STACCATO, INPUT_PULLUP);
+  pinMode(AUX_DIAL, INPUT);
+  pinMode(AUX_ENABLE, INPUT_PULLUP);
 
   // Set the pinmode to PULLUP for the 5 way selector
   pinMode(AMODE_LOWEST, INPUT_PULLUP);
@@ -423,10 +432,10 @@ void loop() {
     }
   }
   MIDI.read();
-  if (digitalRead(STACCATO)) {
+  if (digitalRead(AUX_ENABLE)) {
     noteLength = map(analogRead(ARP_SPEED), 0, 1024, 10, 500);
     // Carve out the gap from the total note length.  (Preserves musical timing)
-    noteGap = map(analogRead(STACC_GAP), 0, 1024, 1, (noteLength * 10) / 9);
+    noteGap = map(analogRead(AUX_DIAL), 0, 1024, 1, (noteLength * 10) / 9);
     noteLength = noteLength - noteGap;
   } else {
     noteLength = map(analogRead(ARP_SPEED), 0, 1024, 10, 500);
